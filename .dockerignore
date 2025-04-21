@@ -1,0 +1,7 @@
+node_modules
+logs
+*.log
+.cache
+.env
+.git
+*.json-job-cache.json
