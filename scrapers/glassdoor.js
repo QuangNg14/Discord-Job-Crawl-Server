@@ -177,9 +177,13 @@ async function scrapeGlassdoor(searchUrl, maxJobs) {
               url,
               company,
               location,
-              salary,
               postedDate,
+              description: "",
+              metadata: "",
+              salary,
+              workModel: "",
               isPartnerListing: true,
+              source: "glassdoor",
             });
           } catch (error) {
             console.error("Error parsing partner listing:", error);
@@ -211,9 +215,20 @@ async function scrapeGlassdoor(searchUrl, maxJobs) {
             el.querySelector('[class*="employer"]') ||
             el.querySelector('[class*="company"]') ||
             el.querySelector(".companyName");
-          const company = companyElement
+          let company = companyElement
             ? (companyElement.textContent || companyElement.innerText).trim()
             : "Unknown Company";
+
+          // Skip aggregated listings
+          if (
+            company &&
+            (company.toLowerCase().includes("jobright") ||
+              company.toLowerCase().includes("indeed") ||
+              company.toLowerCase().includes("ziprecruiter") ||
+              company.toLowerCase().includes("simplyhired"))
+          ) {
+            continue;
+          }
           const locationElement =
             el.querySelector('[data-test="location"]') ||
             el.querySelector('[class*="location"]') ||
@@ -269,8 +284,12 @@ async function scrapeGlassdoor(searchUrl, maxJobs) {
               url,
               company,
               location,
-              salary,
               postedDate,
+              description: "",
+              metadata: "",
+              salary,
+              workModel: "",
+              source: "glassdoor",
             });
           }
         } catch (error) {

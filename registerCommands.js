@@ -28,10 +28,12 @@ async function registerSlashCommands() {
           )
       ),
 
-    // LinkedIn command
+    // LinkedIn command (comprehensive mode)
     new SlashCommandBuilder()
       .setName("linkedin")
-      .setDescription("Run the LinkedIn scraper")
+      .setDescription(
+        "Run the LinkedIn scraper (comprehensive mode - past week focus)"
+      )
       .addStringOption((opt) =>
         opt
           .setName("role")
@@ -41,16 +43,48 @@ async function registerSlashCommands() {
             { name: "intern", value: "intern" },
             { name: "new grad", value: "new grad" }
           )
-      )
+      ),
+
+    // LinkedIn Discord commands with specific time filters (5-10 jobs each)
+    new SlashCommandBuilder()
+      .setName("linkedin-day")
+      .setDescription("Get 5-7 LinkedIn jobs from the past 24 hours")
       .addStringOption((opt) =>
         opt
-          .setName("time")
-          .setDescription("day | week | month (default: day)")
+          .setName("role")
+          .setDescription("intern | new grad (default: intern)")
           .setRequired(false)
           .addChoices(
-            { name: "day", value: "day" },
-            { name: "week", value: "week" },
-            { name: "month", value: "month" }
+            { name: "intern", value: "intern" },
+            { name: "new grad", value: "new grad" }
+          )
+      ),
+
+    new SlashCommandBuilder()
+      .setName("linkedin-week")
+      .setDescription("Get 8-10 LinkedIn jobs from the past week")
+      .addStringOption((opt) =>
+        opt
+          .setName("role")
+          .setDescription("intern | new grad (default: intern)")
+          .setRequired(false)
+          .addChoices(
+            { name: "intern", value: "intern" },
+            { name: "new grad", value: "new grad" }
+          )
+      ),
+
+    new SlashCommandBuilder()
+      .setName("linkedin-month")
+      .setDescription("Get 6-8 LinkedIn jobs from the past month")
+      .addStringOption((opt) =>
+        opt
+          .setName("role")
+          .setDescription("intern | new grad (default: intern)")
+          .setRequired(false)
+          .addChoices(
+            { name: "intern", value: "intern" },
+            { name: "new grad", value: "new grad" }
           )
       ),
 
@@ -210,10 +244,10 @@ async function registerSlashCommands() {
           .setDescription("Specific repository to scrape")
           .setRequired(false)
           .addChoices(
-            { name: "SimplifyJobs", value: "simplify" },
-            { name: "SimplifyJobs Off-Season", value: "offsimplify" },
-            { name: "Vanshb03", value: "vans" },
-            { name: "SpeedyApply", value: "speedy" }
+            { name: "SimplifyJobs-NewGrad", value: "newgrad" },
+            { name: "SimplifyJobs-Summer2026", value: "summer2026" },
+            { name: "Sharunkumar-OffSeason", value: "offseason" },
+            { name: "QuantInternships2026", value: "quant" }
           )
       ),
 
@@ -240,6 +274,7 @@ async function registerSlashCommands() {
             { name: "Glassdoor", value: "glassdoor" },
             { name: "Dice", value: "dice" },
             { name: "GitHub", value: "github" },
+
             { name: "All", value: "all" }
           )
       ),

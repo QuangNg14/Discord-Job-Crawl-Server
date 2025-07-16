@@ -102,6 +102,9 @@ async function scrapeGithubRepo(repo) {
         url: post.link || repo.url,
         postedDate: post.date,
         description: `Role: ${post.role} | Location: ${post.location}`,
+        metadata: "",
+        salary: "",
+        workModel: "",
         source: repo.name,
         repoUrl: repo.url,
       };

@@ -130,8 +130,9 @@ function getFileCachePath(source) {
       return config.dice.fileCache;
     case "github":
       return config.github.fileCache;
+
     default:
-      return `${source}-job-cache.json`;
+      return `cache/${source}-job-cache.json`;
   }
 }
 
@@ -158,16 +159,28 @@ async function addJobs(jobs, source) {
           filter: { jobId: job.id },
           update: {
             $set: {
+              // Required fields
               jobId: job.id,
               timestamp: new Date(),
-              title: job.title,
-              company: job.company,
+              title: job.title || "Position details unavailable",
+              company: job.company || "Company details unavailable",
               location: job.location || "Not specified",
-              url: job.url,
+              url: job.url || "",
               postedDate: job.postedDate || "Not specified",
+              source: job.source || source,
+
+              // Optional fields with defaults
               description: job.description || "",
               metadata: job.metadata || "",
-              source: job.source || source,
+              salary: job.salary || "",
+              workModel: job.workModel || "",
+              isPartnerListing: job.isPartnerListing || false,
+              repoUrl: job.repoUrl || "",
+              normalizedTitle: job.normalizedTitle || "",
+
+              // Additional metadata for better organization
+              scrapedAt: new Date(),
+              lastUpdated: new Date(),
             },
           },
           upsert: true,
@@ -255,6 +268,7 @@ async function clearAllCaches() {
   await clearCache("glassdoor");
   await clearCache("dice");
   await clearCache("github");
+
   return true;
 }
 
@@ -322,6 +336,7 @@ async function getAllCacheStats() {
     glassdoor: glassdoorStats,
     dice: diceStats,
     github: githubStats,
+
     total:
       linkedinStats.count +
       simplyhiredStats.count +

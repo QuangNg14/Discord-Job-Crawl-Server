@@ -604,10 +604,35 @@ async function executeCommand(command, options, client) {
       case "jobslinkedin":
         const result = await linkedinScraper.scrapeAllJobs(
           options.timeFilter,
-          client
+          client,
+          "comprehensive"
         );
         commandStatus.linkedin = result;
         return result;
+      case "jobslinkedinday":
+        const resultLinkedinDay = await linkedinScraper.scrapeAllJobs(
+          config.linkedin.timeFilters.day,
+          client,
+          "discord"
+        );
+        commandStatus.linkedin = resultLinkedinDay;
+        return resultLinkedinDay;
+      case "jobslinkedinweek":
+        const resultLinkedinWeek = await linkedinScraper.scrapeAllJobs(
+          config.linkedin.timeFilters.week,
+          client,
+          "discord"
+        );
+        commandStatus.linkedin = resultLinkedinWeek;
+        return resultLinkedinWeek;
+      case "jobslinkedinmonth":
+        const resultLinkedinMonth = await linkedinScraper.scrapeAllJobs(
+          config.linkedin.timeFilters.month,
+          client,
+          "discord"
+        );
+        commandStatus.linkedin = resultLinkedinMonth;
+        return resultLinkedinMonth;
       case "jobssimplyhired":
         const resultSimplyhired = await simplyhiredScraper.scrapeAllJobs(
           options.timeFilter,
@@ -1136,6 +1161,9 @@ async function handleSlash(interaction, client) {
     const commandMap = {
       jobs: "jobseverything",
       linkedin: "jobslinkedin",
+      "linkedin-day": "jobslinkedinday",
+      "linkedin-week": "jobslinkedinweek",
+      "linkedin-month": "jobslinkedinmonth",
       simplyhired: "jobssimplyhired",
       ziprecruiter: "jobsziprecruiter",
       careerjet: "jobscareerjet",

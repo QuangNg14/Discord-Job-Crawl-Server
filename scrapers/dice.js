@@ -225,6 +225,11 @@ async function scrapeDice(searchUrl, maxJobs) {
           company,
           location,
           postedDate,
+          description: "",
+          metadata: "",
+          salary: "",
+          workModel: "",
+          source: "dice",
         });
       }
 

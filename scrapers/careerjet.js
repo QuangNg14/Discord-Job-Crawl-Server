@@ -97,6 +97,11 @@ async function scrapeCareerjet(searchUrl) {
           company,
           location,
           postedDate,
+          description: "",
+          metadata: "",
+          salary: "",
+          workModel: "",
+          source: "careerjet",
         });
       }
       return results;

@@ -60,8 +60,65 @@ async function scrapeJobRight(searchUrl) {
         const titleEl = anchor.querySelector("h2.index_job-title__UjuEY");
         const title = titleEl ? titleEl.innerText.trim() : "";
 
-        // Attempt to extract company info (if available, use proper selector; otherwise default)
-        let company = "Not specified";
+        // Extract company info with multiple selector attempts
+        let company = "";
+        const companySelectors = [
+          ".index_company__3tRyK",
+          ".company-name",
+          ".index_company-name__abc123",
+          "span[class*='company']",
+          "div[class*='company']",
+          ".index_middle__Q7fZq span:first-child",
+          ".index_middle__Q7fZq div:first-child",
+        ];
+
+        for (const selector of companySelectors) {
+          const companyElement = anchor.querySelector(selector);
+          if (companyElement) {
+            const companyText =
+              companyElement.innerText || companyElement.textContent;
+            if (
+              companyText &&
+              companyText.trim() &&
+              !companyText.includes("•") &&
+              companyText.length > 1
+            ) {
+              company = companyText.trim();
+              break;
+            }
+          }
+        }
+
+        // If no company found in specific selectors, try to parse from metadata
+        if (!company) {
+          const metaEl = anchor.querySelector("div.index_middle__Q7fZq");
+          if (metaEl) {
+            const metaText = metaEl.innerText.trim();
+            // Try to extract company name from metadata (usually first part before location/salary)
+            const parts = metaText.split("•").map((part) => part.trim());
+            if (
+              parts.length > 0 &&
+              parts[0].length > 1 &&
+              !parts[0].includes("$") &&
+              !parts[0].includes("Remote")
+            ) {
+              company = parts[0];
+            }
+          }
+        }
+
+        // Apply fallback only if still no company found
+        if (!company || company === "") {
+          company = "Company name not available";
+        }
+
+        // Debug logging for company extraction
+        console.log(
+          `Jobright extracted - Title: "${title}", Company: "${company}"`
+        );
+        if (metadata) {
+          console.log(`  Metadata: "${metadata}"`);
+        }
 
         // Get the metadata section (for additional details such as location, salary, etc.)
         let metadata = "";
@@ -78,9 +135,13 @@ async function scrapeJobRight(searchUrl) {
           title,
           url: anchor.href || "",
           company,
-          metadata,
           location: "USA", // Default as per configuration
           postedDate: "Recent",
+          description: "",
+          metadata,
+          salary: "",
+          workModel: "",
+          source: "jobright",
         };
       });
     });

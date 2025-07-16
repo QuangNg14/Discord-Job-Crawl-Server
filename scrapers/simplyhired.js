@@ -99,7 +99,11 @@ async function scrapeSimplyHired(searchUrl) {
           company,
           location,
           postedDate,
-          description: null,
+          description: "",
+          metadata: "",
+          salary: "",
+          workModel: "",
+          source: "simplyhired",
         });
       }
       return results;

@@ -104,12 +104,17 @@ async function scrapeZipRecruiter(searchUrl) {
           id: `ziprecruiter-${normalizedTitle
             .replace(/\s+/g, "-")
             .substring(0, 30)}`,
-          normalizedTitle: normalizedTitle,
           title: title,
           url: url,
           company: company,
           location: location,
           postedDate: postedDate,
+          description: "",
+          metadata: "",
+          salary: "",
+          workModel: "",
+          normalizedTitle: normalizedTitle,
+          source: "ziprecruiter",
         });
       }
       return results;
