@@ -30,39 +30,13 @@ const availableScrapers = {
         "comprehensive"
       ),
   },
-  "linkedin-day": {
-    name: "LinkedIn (Past 24 Hours)",
-    scraper: (client) =>
-      linkedinScraper.scrapeAllJobs(
-        config.linkedin.timeFilters.day,
-        client,
-        "discord"
-      ),
-  },
-  "linkedin-week": {
-    name: "LinkedIn (Past Week)",
-    scraper: (client) =>
-      linkedinScraper.scrapeAllJobs(
-        config.linkedin.timeFilters.week,
-        client,
-        "discord"
-      ),
-  },
-  "linkedin-month": {
-    name: "LinkedIn (Past Month)",
-    scraper: (client) =>
-      linkedinScraper.scrapeAllJobs(
-        config.linkedin.timeFilters.month,
-        client,
-        "discord"
-      ),
-  },
   simplyhired: {
     name: "SimplyHired",
     scraper: (client) =>
       simplyhiredScraper.scrapeAllJobs(
         config.simplyhired.timeFilters.day,
-        client
+        client,
+        "comprehensive"
       ),
   },
   ziprecruiter: {
@@ -70,30 +44,40 @@ const availableScrapers = {
     scraper: (client) =>
       ziprecruiterScraper.scrapeAllJobs(
         config.ziprecruiter.timeFilters.day,
-        client
+        client,
+        "comprehensive"
       ),
   },
   careerjet: {
     name: "CareerJet",
     scraper: (client) =>
-      careerjetScraper.scrapeAllJobs(config.careerjet.timeFilters.day, client),
+      careerjetScraper.scrapeAllJobs(
+        config.careerjet.timeFilters.day,
+        client,
+        "comprehensive"
+      ),
   },
   jobright: {
     name: "JobRight",
-    scraper: (client) => jobrightScraper.scrapeAllJobs(client),
+    scraper: (client) => jobrightScraper.scrapeAllJobs(client, "comprehensive"),
   },
   glassdoor: {
     name: "Glassdoor",
-    scraper: (client) => glassdoorScraper.scrapeAllJobs("day", client),
+    scraper: (client) =>
+      glassdoorScraper.scrapeAllJobs("day", client, "comprehensive"),
   },
   dice: {
     name: "Dice",
     scraper: (client) =>
-      diceScraper.scrapeAllJobs(config.dice.timeFilters.day, client),
+      diceScraper.scrapeAllJobs(
+        config.dice.timeFilters.day,
+        client,
+        "comprehensive"
+      ),
   },
   github: {
     name: "GitHub",
-    scraper: (client) => githubScraper.scrapeAllJobs(client),
+    scraper: (client) => githubScraper.scrapeAllJobs(client, "comprehensive"),
   },
 };
 
@@ -208,11 +192,10 @@ function showUsage() {
 
 💡 Examples:
    node scrape.js linkedin              # LinkedIn comprehensive (past week focus)
-   node scrape.js linkedin-day          # LinkedIn Discord (5-7 jobs, past 24h)
-   node scrape.js linkedin-week         # LinkedIn Discord (8-10 jobs, past week)
-   node scrape.js linkedin-month        # LinkedIn Discord (6-8 jobs, past month)
    node scrape.js github                # GitHub repositories
    node scrape.js glassdoor             # Glassdoor jobs
+   node scrape.js simplyhired           # SimplyHired jobs
+   node scrape.js ziprecruiter          # ZipRecruiter jobs
   `);
 }
 
@@ -256,7 +239,8 @@ async function runComprehensiveScrape(client) {
       scraper: () =>
         simplyhiredScraper.scrapeAllJobs(
           config.simplyhired.timeFilters.day,
-          client
+          client,
+          "comprehensive"
         ),
       priority: 2,
     },
@@ -265,7 +249,8 @@ async function runComprehensiveScrape(client) {
       scraper: () =>
         ziprecruiterScraper.scrapeAllJobs(
           config.ziprecruiter.timeFilters.day,
-          client
+          client,
+          "comprehensive"
         ),
       priority: 2,
     },
@@ -274,29 +259,35 @@ async function runComprehensiveScrape(client) {
       scraper: () =>
         careerjetScraper.scrapeAllJobs(
           config.careerjet.timeFilters.day,
-          client
+          client,
+          "comprehensive"
         ),
       priority: 3,
     },
     {
       name: "JobRight",
-      scraper: () => jobrightScraper.scrapeAllJobs(client),
+      scraper: () => jobrightScraper.scrapeAllJobs(client, "comprehensive"),
       priority: 3,
     },
     {
       name: "Glassdoor",
-      scraper: () => glassdoorScraper.scrapeAllJobs("day", client),
+      scraper: () =>
+        glassdoorScraper.scrapeAllJobs("day", client, "comprehensive"),
       priority: 2,
     },
     {
       name: "Dice",
       scraper: () =>
-        diceScraper.scrapeAllJobs(config.dice.timeFilters.day, client),
+        diceScraper.scrapeAllJobs(
+          config.dice.timeFilters.day,
+          client,
+          "comprehensive"
+        ),
       priority: 3,
     },
     {
       name: "GitHub",
-      scraper: () => githubScraper.scrapeAllJobs(client),
+      scraper: () => githubScraper.scrapeAllJobs(client, "comprehensive"),
       priority: 1,
     },
   ];

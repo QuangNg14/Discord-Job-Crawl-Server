@@ -6,7 +6,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * Scrape Glassdoor search results
@@ -318,7 +318,7 @@ async function scrapeGlassdoor(searchUrl, maxJobs) {
  * @param {object} client - Discord client
  * @returns {object} Status object with job count and errors
  */
-async function scrapeMultipleUrls(urls, client) {
+async function scrapeMultipleUrls(urls, client, role = "intern") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -333,9 +333,15 @@ async function scrapeMultipleUrls(urls, client) {
       return lastRunStatus;
     }
 
+    // Determine job limit based on mode (discord = lightweight, comprehensive = thorough)
+    const jobLimit =
+      mode === "comprehensive"
+        ? config.glassdoor.jobLimits.comprehensive
+        : config.glassdoor.jobLimits.discord;
+
     // Scrape all URLs concurrently
     const resultsArr = await Promise.all(
-      urls.map((url) => scrapeGlassdoor(url, config.glassdoor.maxJobsPerSearch))
+      urls.map((url) => scrapeGlassdoor(url, jobLimit))
     );
     let jobs = resultsArr.flat();
 
@@ -346,6 +352,9 @@ async function scrapeMultipleUrls(urls, client) {
       seen.add(job.id);
       return true;
     });
+
+    // Filter for relevant software/data engineering jobs only
+    jobs = filterRelevantJobs(jobs, role);
 
     // Filter out jobs already processed globally
     let newJobs = jobs.filter(
@@ -457,13 +466,19 @@ async function scrapeMultipleUrls(urls, client) {
  * @param {object} client - Discord client
  * @returns {object} Status object
  */
-async function scrapeAllJobs(timeFilter = "day", client) {
+async function scrapeAllJobs(
+  timeFilter = "day",
+  client,
+  mode = "discord",
+  role = "intern"
+) {
   logger.log("Starting Glassdoor job scraping process");
 
   try {
-    // Get the appropriate search URL based on time filter
-    let searchUrl;
+    // Get the appropriate search URL based on time filter (role filtering applied in job processing)
+    logger.log(`Using Glassdoor search URLs (filtering for ${role} roles)`);
 
+    let searchUrl;
     switch (timeFilter) {
       case "week":
         searchUrl = config.glassdoor.searchUrls.week;
@@ -477,7 +492,7 @@ async function scrapeAllJobs(timeFilter = "day", client) {
         break;
     }
 
-    return await scrapeMultipleUrls([searchUrl], client);
+    return await scrapeMultipleUrls([searchUrl], client, role);
   } catch (error) {
     logger.log(
       `Critical error in Glassdoor scrapeAllJobs: ${error.message}`,

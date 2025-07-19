@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * Build Dice.com search URL with special handling for Dice's URL structure
@@ -255,7 +255,12 @@ async function scrapeDice(searchUrl, maxJobs) {
  * @param {object} client - Discord client
  * @returns {object} Status object
  */
-async function scrapeAllJobs(timeFilter = null, client) {
+async function scrapeAllJobs(
+  timeFilter = null,
+  client,
+  mode = "discord",
+  role = "intern"
+) {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -299,7 +304,13 @@ async function scrapeAllJobs(timeFilter = null, client) {
     );
 
     // Process each keyword
-    for (const keyword of config.dice.jobKeywords) {
+    // Use all keywords from config (role filtering applied in job processing)
+    const allKeywords = config.dice.jobKeywords;
+    logger.log(
+      `Using ${allKeywords.length} keywords for Dice search (filtering for ${role} roles)`
+    );
+
+    for (const keyword of allKeywords) {
       try {
         const searchUrl = buildDiceSearchUrl(keyword, diceTimeFilter);
         logger.log(
@@ -307,20 +318,32 @@ async function scrapeAllJobs(timeFilter = null, client) {
         );
         logger.log(`Search URL: ${searchUrl}`);
 
-        const jobs = await scrapeDice(searchUrl, config.dice.maxJobsPerSearch);
+        // Determine job limit based on mode (discord = lightweight, comprehensive = thorough)
+        const jobLimit =
+          mode === "comprehensive"
+            ? config.dice.jobLimits.comprehensive
+            : config.dice.jobLimits.discord;
+        const jobs = await scrapeDice(searchUrl, jobLimit);
 
         if (!jobs || jobs.length === 0) {
           logger.log(`No jobs found for "${keyword}"`);
           continue;
         }
 
+        // Filter for relevant software/data engineering jobs only
+        const relevantJobs = filterRelevantJobs(jobs, role);
+        if (relevantJobs.length === 0) {
+          logger.log(`No relevant software/data jobs found for "${keyword}"`);
+          continue;
+        }
+
         // Filter out jobs already in cache
-        const newJobs = jobs.filter(
+        const newJobs = relevantJobs.filter(
           (job) => !mongoService.jobExists(job.id, "dice")
         );
 
         if (newJobs.length === 0) {
-          logger.log(`No new jobs for "${keyword}"`);
+          logger.log(`No new relevant jobs for "${keyword}"`);
           continue;
         }
 

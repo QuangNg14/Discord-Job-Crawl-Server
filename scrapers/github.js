@@ -5,14 +5,14 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * Scrape a GitHub repository for job listings
  * @param {object} repo - Repository configuration object
  * @returns {Array} Array of job posts
  */
-async function scrapeGithubRepo(repo) {
+async function scrapeGithubRepo(repo, role = "intern") {
   logger.log(`Scraping GitHub repo: ${repo.name} (${repo.url})`);
   let browser;
 
@@ -84,7 +84,7 @@ async function scrapeGithubRepo(repo) {
     await browser.close();
 
     // Process the posts to match our standard job object format
-    const processedPosts = posts.map((post) => {
+    let processedPosts = posts.map((post) => {
       // Build a composite key as repoName_company_date (lower-cased)
       const compositeKey = (
         repo.name +
@@ -109,6 +109,9 @@ async function scrapeGithubRepo(repo) {
         repoUrl: repo.url,
       };
     });
+
+    // Filter for relevant software/data engineering jobs only
+    processedPosts = filterRelevantJobs(processedPosts, role);
 
     return processedPosts;
   } catch (error) {
@@ -142,7 +145,7 @@ async function scrapeRepoAndSend(repo, client) {
       return result;
     }
 
-    const posts = await scrapeGithubRepo(repo);
+    const posts = await scrapeGithubRepo(repo, role);
     if (!posts || posts.length === 0) {
       logger.log(`No posts found in repo ${repo.name}`);
       await channel.send(`No new posts found for ${repo.name}.`);
@@ -162,8 +165,11 @@ async function scrapeRepoAndSend(repo, client) {
       return result;
     }
 
-    // Use repo-specific maxJobs setting
-    const maxJobsForRepo = repo.maxJobs || 5; // Default to 5 if not specified
+    // Use mode-specific job limits (discord = lightweight, comprehensive = thorough)
+    const maxJobsForRepo =
+      mode === "comprehensive"
+        ? repo.maxJobsComprehensive || 50 // Use comprehensive limit or default
+        : repo.maxJobs || 5; // Use discord limit or default
     const postsToSend = newPosts.slice(0, maxJobsForRepo);
 
     // Add jobs to MongoDB cache
@@ -211,7 +217,7 @@ async function scrapeRepoAndSend(repo, client) {
  * @param {object} client - Discord client
  * @returns {object} Status object
  */
-async function scrapeAllJobs(client) {
+async function scrapeAllJobs(client, mode = "discord", role = "intern") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,

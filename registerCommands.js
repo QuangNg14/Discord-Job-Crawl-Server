@@ -28,63 +28,29 @@ async function registerSlashCommands() {
           )
       ),
 
-    // LinkedIn command (comprehensive mode)
+    // LinkedIn command with time options only (lightweight for Discord)
     new SlashCommandBuilder()
       .setName("linkedin")
-      .setDescription(
-        "Run the LinkedIn scraper (comprehensive mode - past week focus)"
+      .setDescription("Get latest LinkedIn jobs (5-10 jobs, lightweight)")
+      .addStringOption((opt) =>
+        opt
+          .setName("role")
+          .setDescription("intern | new grad (default: intern)")
+          .setRequired(false)
+          .addChoices(
+            { name: "intern", value: "intern" },
+            { name: "new grad", value: "new grad" }
+          )
       )
       .addStringOption((opt) =>
         opt
-          .setName("role")
-          .setDescription("intern | new grad (default: intern)")
+          .setName("time")
+          .setDescription("Time filter for job search (default: day)")
           .setRequired(false)
           .addChoices(
-            { name: "intern", value: "intern" },
-            { name: "new grad", value: "new grad" }
-          )
-      ),
-
-    // LinkedIn Discord commands with specific time filters (5-10 jobs each)
-    new SlashCommandBuilder()
-      .setName("linkedin-day")
-      .setDescription("Get 5-7 LinkedIn jobs from the past 24 hours")
-      .addStringOption((opt) =>
-        opt
-          .setName("role")
-          .setDescription("intern | new grad (default: intern)")
-          .setRequired(false)
-          .addChoices(
-            { name: "intern", value: "intern" },
-            { name: "new grad", value: "new grad" }
-          )
-      ),
-
-    new SlashCommandBuilder()
-      .setName("linkedin-week")
-      .setDescription("Get 8-10 LinkedIn jobs from the past week")
-      .addStringOption((opt) =>
-        opt
-          .setName("role")
-          .setDescription("intern | new grad (default: intern)")
-          .setRequired(false)
-          .addChoices(
-            { name: "intern", value: "intern" },
-            { name: "new grad", value: "new grad" }
-          )
-      ),
-
-    new SlashCommandBuilder()
-      .setName("linkedin-month")
-      .setDescription("Get 6-8 LinkedIn jobs from the past month")
-      .addStringOption((opt) =>
-        opt
-          .setName("role")
-          .setDescription("intern | new grad (default: intern)")
-          .setRequired(false)
-          .addChoices(
-            { name: "intern", value: "intern" },
-            { name: "new grad", value: "new grad" }
+            { name: "past 24 hours", value: "day" },
+            { name: "past week", value: "week" },
+            { name: "past month", value: "month" }
           )
       ),
 

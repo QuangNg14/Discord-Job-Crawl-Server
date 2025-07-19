@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * Scrape Jobright.ai search results
@@ -161,7 +161,7 @@ async function scrapeJobRight(searchUrl) {
  * @param {object} client - Discord client
  * @returns {object} Status object
  */
-async function scrapeAllJobs(client) {
+async function scrapeAllJobs(client, mode = "discord", role = "intern") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -181,7 +181,13 @@ async function scrapeAllJobs(client) {
     await channel.send("Jobright.ai - Software Engineering Jobs Update");
 
     // Process each search configuration
-    for (const searchConfig of config.jobright.searches) {
+    // Use all searches from config (role filtering applied in job processing)
+    const allSearches = config.jobright.searches;
+    logger.log(
+      `Using ${allSearches.length} searches for JobRight (filtering for ${role} roles)`
+    );
+
+    for (const searchConfig of allSearches) {
       try {
         const searchUrl = `${
           config.jobright.baseUrl
@@ -197,18 +203,34 @@ async function scrapeAllJobs(client) {
           continue;
         }
 
-        // Filter out jobs already in the cache
-        const newJobs = jobs.filter(
-          (job) => !mongoService.jobExists(job.id, "jobright")
-        );
-        if (newJobs.length === 0) {
-          logger.log(`No new jobs for ${searchConfig.name}`);
-          await channel.send(`No new jobs for ${searchConfig.name}.`);
+        // Filter for relevant software/data engineering jobs only
+        const relevantJobs = filterRelevantJobs(jobs, role);
+        if (relevantJobs.length === 0) {
+          logger.log(
+            `No relevant software/data jobs found for ${searchConfig.name}`
+          );
+          await channel.send(
+            `No relevant software/data jobs found for ${searchConfig.name}.`
+          );
           continue;
         }
 
-        // Limit to max jobs per search
-        const postsToSend = newJobs.slice(0, config.jobright.maxJobsPerSearch);
+        // Filter out jobs already in the cache
+        const newJobs = relevantJobs.filter(
+          (job) => !mongoService.jobExists(job.id, "jobright")
+        );
+        if (newJobs.length === 0) {
+          logger.log(`No new relevant jobs for ${searchConfig.name}`);
+          await channel.send(`No new relevant jobs for ${searchConfig.name}.`);
+          continue;
+        }
+
+        // Select jobs based on mode (discord = lightweight, comprehensive = thorough)
+        const jobLimit =
+          mode === "comprehensive"
+            ? config.jobright.jobLimits.comprehensive
+            : config.jobright.jobLimits.discord;
+        const postsToSend = newJobs.slice(0, jobLimit);
 
         // Add jobs to MongoDB cache
         await mongoService.addJobs(postsToSend, "jobright");

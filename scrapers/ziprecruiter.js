@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * Helper function to convert timeFilter to ZipRecruiter's "days" parameter
@@ -145,7 +145,12 @@ async function scrapeZipRecruiter(searchUrl) {
  * @param {object} client - Discord client
  * @returns {object} Status object
  */
-async function scrapeAllJobs(timeFilter = null, client) {
+async function scrapeAllJobs(
+  timeFilter = null,
+  client,
+  mode = "discord",
+  role = "intern"
+) {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -166,7 +171,13 @@ async function scrapeAllJobs(timeFilter = null, client) {
     await channel.send("ZipRecruiter Job Postings Update");
 
     // Loop over each keyword (location is blank for USA-wide search)
-    for (const keyword of config.ziprecruiter.jobKeywords) {
+    // Use all keywords from config (role filtering applied in job processing)
+    const allKeywords = config.ziprecruiter.jobKeywords;
+    logger.log(
+      `Using ${allKeywords.length} keywords for ZipRecruiter search (filtering for ${role} roles)`
+    );
+
+    for (const keyword of allKeywords) {
       try {
         const encodedKeyword = encodeURIComponent(keyword);
         logger.log(`Encoded keyword: ${encodedKeyword}`);
@@ -192,20 +203,29 @@ async function scrapeAllJobs(timeFilter = null, client) {
           continue;
         }
 
-        // Filter out jobs already in cache
-        const newJobs = jobs.filter(
-          (job) => !mongoService.jobExists(job.id, "ziprecruiter")
-        );
-        if (newJobs.length === 0) {
-          logger.log(`No new jobs for "${keyword}"`);
+        // Filter for relevant software/data engineering jobs only
+        const relevantJobs = filterRelevantJobs(jobs, role);
+        if (relevantJobs.length === 0) {
+          logger.log(`No relevant software/data jobs found for "${keyword}"`);
           continue;
         }
 
-        // Select up to maxJobsPerSearch jobs
+        // Filter out jobs already in cache
+        const newJobs = relevantJobs.filter(
+          (job) => !mongoService.jobExists(job.id, "ziprecruiter")
+        );
+        if (newJobs.length === 0) {
+          logger.log(`No new relevant jobs for "${keyword}"`);
+          continue;
+        }
+
+        // Select jobs based on mode (discord = lightweight, comprehensive = thorough)
+        const jobLimit =
+          mode === "comprehensive"
+            ? config.ziprecruiter.jobLimits.comprehensive
+            : config.ziprecruiter.jobLimits.discord;
         const selectedJobs =
-          newJobs.length > config.ziprecruiter.maxJobsPerSearch
-            ? newJobs.slice(0, config.ziprecruiter.maxJobsPerSearch)
-            : newJobs;
+          newJobs.length > jobLimit ? newJobs.slice(0, jobLimit) : newJobs;
 
         // Add jobs to MongoDB cache
         await mongoService.addJobs(selectedJobs, "ziprecruiter");

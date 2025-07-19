@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * Map time filter to Careerjet's "nw" parameter (1, 7, or 30 days)
@@ -126,7 +126,12 @@ async function scrapeCareerjet(searchUrl) {
  * @param {object} client - Discord client
  * @returns {object} Status object
  */
-async function scrapeAllJobs(timeFilter = null, client) {
+async function scrapeAllJobs(
+  timeFilter = null,
+  client,
+  mode = "discord",
+  role = "intern"
+) {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -147,7 +152,13 @@ async function scrapeAllJobs(timeFilter = null, client) {
     await channel.send("CareerJet Job Postings Update");
 
     // Loop over each keyword and build the search URL dynamically
-    for (const keyword of config.careerjet.jobKeywords) {
+    // Use all keywords from config (role filtering applied in job processing)
+    const allKeywords = config.careerjet.jobKeywords;
+    logger.log(
+      `Using ${allKeywords.length} keywords for CareerJet search (filtering for ${role} roles)`
+    );
+
+    for (const keyword of allKeywords) {
       try {
         const encodedKeyword = encodeURIComponent(keyword);
         logger.log(`Encoded keyword: ${encodedKeyword}`);
@@ -170,17 +181,28 @@ async function scrapeAllJobs(timeFilter = null, client) {
           continue;
         }
 
-        // Filter out already-posted jobs using the cache
-        const newJobs = jobs.filter(
-          (job) => !mongoService.jobExists(job.id, "careerjet")
-        );
-        if (newJobs.length === 0) {
-          logger.log(`No new jobs for "${keyword}"`);
+        // Filter for relevant software/data engineering jobs only
+        const relevantJobs = filterRelevantJobs(jobs, role);
+        if (relevantJobs.length === 0) {
+          logger.log(`No relevant software/data jobs found for "${keyword}"`);
           continue;
         }
 
-        // Select only up to maxJobsPerSearch new jobs to post
-        const postsToSend = newJobs.slice(0, config.careerjet.maxJobsPerSearch);
+        // Filter out already-posted jobs using the cache
+        const newJobs = relevantJobs.filter(
+          (job) => !mongoService.jobExists(job.id, "careerjet")
+        );
+        if (newJobs.length === 0) {
+          logger.log(`No new relevant jobs for "${keyword}"`);
+          continue;
+        }
+
+        // Select jobs based on mode (discord = lightweight, comprehensive = thorough)
+        const jobLimit =
+          mode === "comprehensive"
+            ? config.careerjet.jobLimits.comprehensive
+            : config.careerjet.jobLimits.discord;
+        const postsToSend = newJobs.slice(0, jobLimit);
 
         // Add jobs to MongoDB cache
         await mongoService.addJobs(postsToSend, "careerjet");

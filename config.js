@@ -145,7 +145,175 @@ module.exports = {
     ignoreDefaultArgs: ["--enable-automation"],
   },
 
+  // Global job filtering configuration
+  jobFiltering: {
+    // Keywords that must be present in job titles (at least one)
+    requiredKeywords: [
+      "software",
+      "data",
+      "frontend",
+      "backend",
+      "fullstack",
+      "full-stack",
+      "full stack",
+      "web",
+      "mobile",
+      "app",
+      "application",
+      "system",
+      "platform",
+      "cloud",
+      "devops",
+      "machine learning",
+      "ml",
+      "ai",
+      "artificial intelligence",
+      "analytics",
+      "database",
+      "algorithm",
+      "programming",
+      "developer",
+      "development",
+      "engineer",
+      "engineering",
+      "react",
+      "node",
+      "python",
+      "java",
+      "javascript",
+      "typescript",
+      "c++",
+      "c#",
+      "golang",
+      "rust",
+      "kotlin",
+      "swift",
+      "php",
+      "ruby",
+      "scala",
+      "cybersecurity",
+      "security",
+      "infrastructure",
+      "blockchain",
+      "crypto",
+      "fintech",
+      "api",
+      "microservices",
+    ],
+
+    // Keywords that exclude jobs (if present, job is rejected)
+    excludedKeywords: [
+      "geotechnical",
+      "civil",
+      "mechanical",
+      "electrical",
+      "chemical",
+      "biomedical",
+      "environmental",
+      "aerospace",
+      "nuclear",
+      "petroleum",
+      "mining",
+      "construction",
+      "hvac",
+      "plumbing",
+      "welding",
+      "manufacturing",
+      "production",
+      "assembly",
+      "field service",
+      "field engineer",
+      "field technician",
+      "maintenance",
+      "repair",
+      "quality assurance engineer",
+      "qa engineer",
+      "test engineer",
+      "validation engineer",
+      "process engineer",
+      "project engineer",
+      "design engineer",
+      "sales engineer",
+      "application engineer",
+      "field application",
+      "technical support engineer",
+      "hardware engineer",
+      "firmware engineer",
+      "embedded engineer",
+      "rf engineer",
+      "analog engineer",
+      "digital design engineer",
+      "circuit",
+      "pcb",
+      "asic",
+      "fpga",
+      "water resources",
+      "structural",
+      "transportation",
+      "urban planning",
+      "surveying",
+      "materials engineer",
+      "metallurgical",
+      "ceramic",
+      "polymer",
+      "textile",
+      "food engineer",
+      "agricultural",
+      "forest engineer",
+      "packaging engineer",
+      "safety engineer",
+      "compliance engineer",
+      "regulatory engineer",
+      "clinical engineer",
+      "bioprocess",
+      "pharmaceutical",
+      "medical device",
+      "laboratory",
+      "research engineer",
+      "operations engineer",
+      "facility engineer",
+      "building engineer",
+      "energy engineer",
+      "power engineer",
+      "control engineer",
+      "instrumentation",
+      "automation engineer",
+      "industrial engineer",
+      "logistics engineer",
+      "supply chain engineer",
+    ],
+
+    // Specific software/data role indicators (if present, job is accepted regardless)
+    softwareDataIndicators: [
+      "software engineer",
+      "software developer",
+      "software development",
+      "data engineer",
+      "data scientist",
+      "data analyst",
+      "machine learning",
+      "full stack",
+      "frontend",
+      "backend",
+      "web developer",
+      "mobile developer",
+      "devops",
+      "cloud engineer",
+      "platform engineer",
+      "infrastructure engineer",
+      "security engineer",
+      "ai engineer",
+      "ml engineer",
+      "backend engineer",
+      "frontend engineer",
+      "fullstack engineer",
+    ],
+  },
+
   // LinkedIn scraper configuration
+  // Single /linkedin command supports:
+  // - Time options: day, week, month
+  // - Discord commands are lightweight (5-10 jobs), comprehensive mode only for internal use
   linkedin: {
     jobKeywords: [
       "software engineer intern",
@@ -155,6 +323,19 @@ module.exports = {
       "software engineer graduate",
       "software development new grad",
       "software development entry level",
+      "data engineer intern",
+      "data engineer new grad",
+      "data engineer entry level",
+      "data scientist intern",
+      "data scientist new grad",
+      "data scientist entry level",
+      "machine learning intern",
+      "machine learning engineer",
+      "full stack developer intern",
+      "frontend engineer intern",
+      "backend engineer intern",
+      "web developer intern",
+      "mobile developer intern",
     ],
     jobLocations: ["United States"],
     maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
@@ -172,15 +353,15 @@ module.exports = {
       week: "r604800", // Past week
       month: "r2592000", // Past month
     },
-    // Job limits for different modes
+    // Job limits for different modes (selected via /linkedin mode option)
     jobLimits: {
-      // Discord command limits (5-10 jobs per command)
+      // Discord mode limits (5-10 jobs for quick Discord responses)
       discord: {
         day: 7,
         week: 10,
         month: 8,
       },
-      // Comprehensive scraping limits (focus on past week)
+      // Comprehensive mode limits (thorough scraping)
       comprehensive: {
         default: 50,
         week: 75, // Higher limit for comprehensive weekly scraping
@@ -196,10 +377,16 @@ module.exports = {
       "software engineer intern",
       "software engineer new grad",
       "software engineer entry level",
+      "data engineer intern",
+      "data engineer new grad",
+      "data scientist intern",
+      "machine learning intern",
+      "full stack developer intern",
+      "web developer intern",
     ],
     jobLocations: ["United States"],
-    maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
-    maxPages: 10, // Increased from 3 for comprehensive scraping
+    maxJobsPerSearch: 7, // Lightweight for Discord commands
+    maxPages: 3, // Lightweight for Discord commands
     fileCache: "cache/simplyhired-job-cache.json",
     embedColor: "#1e90ff",
     timeFilters: {
@@ -208,7 +395,8 @@ module.exports = {
       month: "30",
     },
     jobLimits: {
-      default: 50, // Increased from 5 for comprehensive scraping
+      discord: 7, // Lightweight for Discord commands
+      comprehensive: 50, // For internal script execution
     },
   },
 
@@ -218,15 +406,25 @@ module.exports = {
       "software engineer intern",
       "software engineer new grad",
       "software engineer entry level",
+      "data engineer intern",
+      "data engineer new grad",
+      "data scientist intern",
+      "machine learning intern",
+      "full stack developer intern",
+      "web developer intern",
     ],
     jobLocations: [""],
-    maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
+    maxJobsPerSearch: 8, // Lightweight for Discord commands
     fileCache: "cache/ziprecruiter-job-cache.json",
     embedColor: "#1e90ff",
     timeFilters: {
       day: "1",
       week: "5",
       month: "30",
+    },
+    jobLimits: {
+      discord: 8, // Lightweight for Discord commands
+      comprehensive: 50, // For internal script execution
     },
   },
 
@@ -236,8 +434,14 @@ module.exports = {
       "software engineer intern",
       "software engineer new grad",
       "software engineer entry level",
+      "data engineer intern",
+      "data engineer new grad",
+      "data scientist intern",
+      "machine learning intern",
+      "full stack developer intern",
+      "web developer intern",
     ],
-    maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
+    maxJobsPerSearch: 6, // Lightweight for Discord commands
     fileCache: "cache/careerjet-job-cache.json",
     embedColor: "#1e90ff",
     timeFilters: {
@@ -246,7 +450,8 @@ module.exports = {
       month: "30",
     },
     jobLimits: {
-      default: 50, // Increased from 5 for comprehensive scraping
+      discord: 6, // Lightweight for Discord commands
+      comprehensive: 50, // For internal script execution
     },
   },
 
@@ -258,22 +463,54 @@ module.exports = {
         name: "Software Engineer Intern",
         jobTitle: "Software Engineer",
       },
+      {
+        name: "Data Engineer Intern",
+        jobTitle: "Data Engineer",
+      },
+      {
+        name: "Data Scientist Intern",
+        jobTitle: "Data Scientist",
+      },
+      {
+        name: "Machine Learning Engineer",
+        jobTitle: "Machine Learning Engineer",
+      },
+      {
+        name: "Full Stack Developer",
+        jobTitle: "Full Stack Developer",
+      },
     ],
     additionalParams:
       "workModel=2&city=Within+US&seniority=1&jobTypes=1%2C2%2C3%2C4&radiusRange=50",
-    maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
+    maxJobsPerSearch: 7, // Lightweight for Discord commands
     fileCache: "cache/jobright-job-cache.json",
     embedColor: "#1e90ff",
+    jobLimits: {
+      discord: 7, // Lightweight for Discord commands
+      comprehensive: 50, // For internal script execution
+    },
   },
 
   // Glassdoor scraper configuration
   glassdoor: {
-    jobKeywords: ["software-engineer-intern"],
+    jobKeywords: [
+      "software-engineer-intern",
+      "software-engineer-new-grad",
+      "data-engineer-intern",
+      "data-scientist-intern",
+      "machine-learning-intern",
+      "full-stack-developer-intern",
+      "web-developer-intern",
+    ],
     jobLocations: ["us"],
-    maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
-    maxJobsToPost: 50, // Increased from 5 for comprehensive scraping
+    maxJobsPerSearch: 8, // Lightweight for Discord commands
+    maxJobsToPost: 8, // Lightweight for Discord commands
     fileCache: "cache/glassdoor-job-cache.json",
     embedColor: "#0caa41",
+    jobLimits: {
+      discord: 8, // Lightweight for Discord commands
+      comprehensive: 50, // For internal script execution
+    },
     searchUrls: {
       day: "https://www.glassdoor.com/Job/us-software-engineer-intern-jobs-SRCH_IL.0,2_IS1_KO3,27_IP1.htm?sortBy=date_desc&fromAge=1",
       week: "https://www.glassdoor.com/Job/us-software-engineer-intern-jobs-SRCH_IL.0,2_IS1_KO3,27_IP1.htm?sortBy=date_desc&fromAge=7",
@@ -288,8 +525,14 @@ module.exports = {
       "software engineer intern",
       "software engineer new grad",
       "software engineer entry level",
+      "data engineer intern",
+      "data engineer new grad",
+      "data scientist intern",
+      "machine learning intern",
+      "full stack developer intern",
+      "web developer intern",
     ],
-    maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
+    maxJobsPerSearch: 7, // Lightweight for Discord commands
     fileCache: "cache/dice-job-cache.json",
     embedColor: "#2b2b67",
     baseUrl: "https://www.dice.com/jobs",
@@ -298,9 +541,13 @@ module.exports = {
       radius: "30",
       radiusUnit: "mi",
       page: "1",
-      pageSize: "50", // Increased from 20 for comprehensive scraping
+      pageSize: "20", // Lightweight for Discord commands
       language: "en",
       eid: "8855",
+    },
+    jobLimits: {
+      discord: 7, // Lightweight for Discord commands
+      comprehensive: 50, // For internal script execution
     },
     timeFilters: {
       day: "ONE",
@@ -317,25 +564,29 @@ module.exports = {
       {
         name: "SimplifyJobs-NewGrad",
         url: "https://github.com/SimplifyJobs/New-Grad-Positions",
-        maxJobs: 100, // Increased from 25 for comprehensive scraping
+        maxJobs: 10, // Lightweight for Discord commands
+        maxJobsComprehensive: 100, // For internal script execution
         type: "new_grad",
       },
       {
         name: "SimplifyJobs-Summer2026",
-        url: "https://github.com/vanshb03/Summer2026-Internships",
-        maxJobs: 80, // Increased from 20 for comprehensive scraping
+        url: "https://github.com/SimplifyJobs/Summer2026-Internships",
+        maxJobs: 8, // Lightweight for Discord commands
+        maxJobsComprehensive: 80, // For internal script execution
         type: "intern",
       },
       {
         name: "SharunkumarOffSeason",
         url: "https://github.com/sharunkumar/Summer-Internships/blob/dev/README-Off-Season.md",
-        maxJobs: 60, // Increased from 15 for comprehensive scraping
+        maxJobs: 6, // Lightweight for Discord commands
+        maxJobsComprehensive: 60, // For internal script execution
         type: "intern",
       },
       {
         name: "QuantInternships2026",
         url: "https://github.com/northwesternfintech/2026QuantInternships",
-        maxJobs: 40, // Increased from 10 for comprehensive scraping
+        maxJobs: 5, // Lightweight for Discord commands
+        maxJobsComprehensive: 40, // For internal script execution
         type: "quant",
       },
     ],

@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * SimplyHired scraper function using Puppeteer
@@ -132,7 +132,12 @@ async function scrapeSimplyHired(searchUrl) {
  * @param {object} client - Discord client
  * @returns {object} Status object with job count and errors
  */
-async function scrapeAllJobs(timeFilter = "1", client) {
+async function scrapeAllJobs(
+  timeFilter = "1",
+  client,
+  mode = "discord",
+  role = "intern"
+) {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -150,8 +155,14 @@ async function scrapeAllJobs(timeFilter = "1", client) {
     }
     await channel.send("SimplyHired Job Postings Update");
 
+    // Use all keywords from config (role filtering applied in job processing)
+    const allKeywords = config.simplyhired.jobKeywords;
+    logger.log(
+      `Using ${allKeywords.length} keywords for SimplyHired search (filtering for ${role} roles)`
+    );
+
     // Loop through each keyword and location
-    for (const keyword of config.simplyhired.jobKeywords) {
+    for (const keyword of allKeywords) {
       for (const location of config.simplyhired.jobLocations) {
         try {
           const encodedKeyword = encodeURIComponent(keyword);
@@ -170,11 +181,14 @@ async function scrapeAllJobs(timeFilter = "1", client) {
           logger.log(`Scraping SimplyHired for "${keyword}" in "${location}"`);
           logger.log(`Base Search URL: ${baseUrl}`);
 
-          // Get job limit based on keyword, with fallback to default
+          // Get job limit based on mode (discord = lightweight, comprehensive = thorough)
           const jobLimit =
-            config.simplyhired.jobLimits[keyword] ||
-            config.simplyhired.jobLimits.default;
-          logger.log(`Using job limit of ${jobLimit} for keyword "${keyword}"`);
+            mode === "comprehensive"
+              ? config.simplyhired.jobLimits.comprehensive
+              : config.simplyhired.jobLimits.discord;
+          logger.log(
+            `Using job limit of ${jobLimit} for keyword "${keyword}" (${mode} mode)`
+          );
 
           // Use a Map to hold unique new jobs
           const uniqueNewJobs = new Map();
@@ -198,8 +212,11 @@ async function scrapeAllJobs(timeFilter = "1", client) {
               break;
             }
 
+            // Filter for relevant jobs first
+            const relevantPageJobs = filterRelevantJobs(pageJobs, role);
+
             // Add jobs if not already in cache or our Map
-            pageJobs.forEach((job) => {
+            relevantPageJobs.forEach((job) => {
               if (
                 !mongoService.jobExists(job.id, "simplyhired") &&
                 !uniqueNewJobs.has(job.id)

@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay } = require("../utils/helpers");
+const { delay, filterRelevantJobs } = require("../utils/helpers");
 
 /**
  * Extract clean text from element, removing unwanted characters
@@ -335,7 +335,8 @@ async function scrapeLinkedInWithRetry(searchUrl, maxJobs, retries = 3) {
 async function scrapeAllJobs(
   timeFilter = null,
   client,
-  mode = "comprehensive"
+  mode = "comprehensive",
+  role = "intern"
 ) {
   const lastRunStatus = {
     lastRun: new Date(),
@@ -363,7 +364,13 @@ async function scrapeAllJobs(
       mode === "discord" ? " (Discord Command)" : " (Comprehensive)";
     await channel.send(`LinkedIn Job Postings Update${modeText}`);
 
-    for (const keyword of config.linkedin.jobKeywords) {
+    // Use all keywords from config (role filtering applied in job processing)
+    const allKeywords = config.linkedin.jobKeywords;
+    logger.log(
+      `Using ${allKeywords.length} keywords for LinkedIn search (filtering for ${role} roles)`
+    );
+
+    for (const keyword of allKeywords) {
       for (const location of config.linkedin.jobLocations) {
         try {
           // Build search URL with proper parameters matching user's LinkedIn URLs
@@ -422,29 +429,38 @@ async function scrapeAllJobs(
             continue;
           }
 
+          // Filter for relevant software/data engineering jobs only
+          const relevantJobs = filterRelevantJobs(jobs, role);
+          if (relevantJobs.length === 0) {
+            logger.log(
+              `No relevant software/data jobs found for "${keyword}" in "${location}"`
+            );
+            continue;
+          }
+
           // Filter out jobs that already exist in the cache
-          const newJobs = jobs.filter(
+          const newJobs = relevantJobs.filter(
             (job) => !mongoService.jobExists(job.id, "linkedin")
           );
 
           // Log job data quality
-          const validJobs = jobs.filter(
+          const validJobs = relevantJobs.filter(
             (job) =>
               job.title &&
               !job.title.includes("*") &&
               job.title !== "Position details unavailable"
           );
-          const invalidJobs = jobs.length - validJobs.length;
+          const invalidJobs = relevantJobs.length - validJobs.length;
 
           if (invalidJobs > 0) {
             logger.log(
-              `Warning: ${invalidJobs}/${jobs.length} jobs had invalid/missing data for "${keyword}" in "${location}"`,
+              `Warning: ${invalidJobs}/${relevantJobs.length} jobs had invalid/missing data for "${keyword}" in "${location}"`,
               "warn"
             );
           }
 
           logger.log(
-            `Found ${jobs.length} total jobs, ${newJobs.length} new jobs for "${keyword}" in "${location}" (${mode} mode)`
+            `Found ${jobs.length} total jobs, ${relevantJobs.length} relevant jobs, ${newJobs.length} new jobs for "${keyword}" in "${location}" (${mode} mode)`
           );
 
           // Add new jobs to the cache

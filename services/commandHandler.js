@@ -602,78 +602,81 @@ async function executeCommand(command, options, client) {
           ),
         };
       case "jobslinkedin":
+        // Map time filter to LinkedIn config
+        const linkedinTimeFilter =
+          config.linkedin.timeFilters[options.timeFilter] ||
+          config.linkedin.timeFilters.day;
+        // Always use discord mode for slash commands (lightweight)
+        const linkedinMode = "discord";
+        const linkedinRole = options.role || "intern";
+
         const result = await linkedinScraper.scrapeAllJobs(
-          options.timeFilter,
+          linkedinTimeFilter,
           client,
-          "comprehensive"
+          linkedinMode,
+          linkedinRole
         );
         commandStatus.linkedin = result;
         return result;
-      case "jobslinkedinday":
-        const resultLinkedinDay = await linkedinScraper.scrapeAllJobs(
-          config.linkedin.timeFilters.day,
-          client,
-          "discord"
-        );
-        commandStatus.linkedin = resultLinkedinDay;
-        return resultLinkedinDay;
-      case "jobslinkedinweek":
-        const resultLinkedinWeek = await linkedinScraper.scrapeAllJobs(
-          config.linkedin.timeFilters.week,
-          client,
-          "discord"
-        );
-        commandStatus.linkedin = resultLinkedinWeek;
-        return resultLinkedinWeek;
-      case "jobslinkedinmonth":
-        const resultLinkedinMonth = await linkedinScraper.scrapeAllJobs(
-          config.linkedin.timeFilters.month,
-          client,
-          "discord"
-        );
-        commandStatus.linkedin = resultLinkedinMonth;
-        return resultLinkedinMonth;
       case "jobssimplyhired":
         const resultSimplyhired = await simplyhiredScraper.scrapeAllJobs(
           options.timeFilter,
-          client
+          client,
+          "discord",
+          options.role || "intern"
         );
         commandStatus.simplyhired = resultSimplyhired;
         return resultSimplyhired;
       case "jobsziprecruiter":
         const resultZiprecruiter = await ziprecruiterScraper.scrapeAllJobs(
           options.timeFilter,
-          client
+          client,
+          "discord",
+          options.role || "intern"
         );
         commandStatus.ziprecruiter = resultZiprecruiter;
         return resultZiprecruiter;
       case "jobscareerjet":
         const resultCareerjet = await careerjetScraper.scrapeAllJobs(
           options.timeFilter,
-          client
+          client,
+          "discord",
+          options.role || "intern"
         );
         commandStatus.careerjet = resultCareerjet;
         return resultCareerjet;
       case "jobsjobright":
-        const resultJobright = await jobrightScraper.scrapeAllJobs(client);
+        const resultJobright = await jobrightScraper.scrapeAllJobs(
+          client,
+          "discord",
+          options.role || "intern"
+        );
         commandStatus.jobright = resultJobright;
         return resultJobright;
       case "jobsglassdoor":
         const resultGlassdoor = await glassdoorScraper.scrapeAllJobs(
           options.timeFilter,
-          client
+          client,
+          "discord",
+          options.role || "intern"
         );
         commandStatus.glassdoor = resultGlassdoor;
         return resultGlassdoor;
       case "jobsdice":
         const resultDice = await diceScraper.scrapeAllJobs(
           options.timeFilter,
-          client
+          client,
+          "discord",
+          options.role || "intern"
         );
         commandStatus.dice = resultDice;
         return resultDice;
       case "jobsgithub":
-        const resultGithub = await githubScraper.scrapeAllJobs(client);
+        const resultGithub = await githubScraper.scrapeAllJobs(
+          client,
+          "discord",
+          options.role || "intern"
+        );
         commandStatus.github = resultGithub;
         return resultGithub;
       case "jobsgithubspecific":
@@ -1161,9 +1164,6 @@ async function handleSlash(interaction, client) {
     const commandMap = {
       jobs: "jobseverything",
       linkedin: "jobslinkedin",
-      "linkedin-day": "jobslinkedinday",
-      "linkedin-week": "jobslinkedinweek",
-      "linkedin-month": "jobslinkedinmonth",
       simplyhired: "jobssimplyhired",
       ziprecruiter: "jobsziprecruiter",
       careerjet: "jobscareerjet",
@@ -1195,6 +1195,14 @@ async function handleSlash(interaction, client) {
         glassdoorTimeFilter: time,
         diceTimeFilter: time,
       };
+    } else if (legacyCommand === "jobslinkedin") {
+      // Handle LinkedIn-specific options
+      const mode = options.getString("mode") || "discord";
+      commandOptions = {
+        timeFilter: time,
+        mode: mode,
+        role: role,
+      };
     } else if (legacyCommand === "jobsgithub") {
       const repo = options.getString("repo");
       if (repo) {
@@ -1206,7 +1214,7 @@ async function handleSlash(interaction, client) {
         commandOptions = { source };
       }
     } else if (legacyCommand !== "status") {
-      commandOptions = { timeFilter: time };
+      commandOptions = { timeFilter: time, role: role };
     }
 
     // Execute the command
