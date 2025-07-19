@@ -128,9 +128,16 @@ async function scrapeGithubRepo(repo, role = "intern") {
  * Helper: Scrape a single repo and send posts
  * @param {object} repo - Repository configuration object
  * @param {object} client - Discord client
+ * @param {string} mode - Scraping mode ("discord" or "comprehensive")
+ * @param {string} role - Job role to filter for ("intern" or "new grad")
  * @returns {object} Status object with counts
  */
-async function scrapeRepoAndSend(repo, client) {
+async function scrapeRepoAndSend(
+  repo,
+  client,
+  mode = "discord",
+  role = "intern"
+) {
   const result = {
     lastRun: new Date(),
     success: false,
@@ -238,7 +245,7 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern") {
 
     // Process each repo and collect results
     for (const repo of config.github.repos) {
-      const repoResult = await scrapeRepoAndSend(repo, client);
+      const repoResult = await scrapeRepoAndSend(repo, client, mode, role);
       lastRunStatus.jobsFound += repoResult.jobsFound;
       lastRunStatus.errorCount += repoResult.errorCount;
     }
@@ -264,9 +271,16 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern") {
  * Scrape a specific repository by name
  * @param {string} repoName - Name of the repository to scrape
  * @param {object} client - Discord client
+ * @param {string} mode - Scraping mode ("discord" or "comprehensive")
+ * @param {string} role - Job role to filter for ("intern" or "new grad")
  * @returns {object} Status object
  */
-async function scrapeSpecificRepo(repoName, client) {
+async function scrapeSpecificRepo(
+  repoName,
+  client,
+  mode = "discord",
+  role = "intern"
+) {
   logger.log(`Looking for repo with name: ${repoName}`);
 
   const repo = config.github.repos.find(
@@ -283,7 +297,7 @@ async function scrapeSpecificRepo(repoName, client) {
     };
   }
 
-  return await scrapeRepoAndSend(repo, client);
+  return await scrapeRepoAndSend(repo, client, mode, role);
 }
 
 module.exports = {

@@ -77,7 +77,8 @@ const availableScrapers = {
   },
   github: {
     name: "GitHub",
-    scraper: (client) => githubScraper.scrapeAllJobs(client, "comprehensive"),
+    scraper: (client) =>
+      githubScraper.scrapeAllJobs(client, "comprehensive", "intern"),
   },
 };
 
@@ -287,7 +288,8 @@ async function runComprehensiveScrape(client) {
     },
     {
       name: "GitHub",
-      scraper: () => githubScraper.scrapeAllJobs(client, "comprehensive"),
+      scraper: () =>
+        githubScraper.scrapeAllJobs(client, "comprehensive", "intern"),
       priority: 1,
     },
   ];

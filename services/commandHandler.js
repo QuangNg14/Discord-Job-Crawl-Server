@@ -682,7 +682,9 @@ async function executeCommand(command, options, client) {
       case "jobsgithubspecific":
         const resultGithubSpecific = await githubScraper.scrapeSpecificRepo(
           options.repoName,
-          client
+          client,
+          "discord",
+          options.role || "intern"
         );
         // Update command status but only for successfully scraped repos
         if (resultGithubSpecific.success) {
