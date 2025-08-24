@@ -2,10 +2,47 @@
 module.exports = {
   // Discord configuration
   channelId: process.env.CHANNEL_ID,
-  debugMode: process.env.DEBUG_MODE === "true",
+  debugMode: false, // Disable debug mode for production efficiency
 
   // Main scraping schedule (for all job sources)
-  scrapingSchedule: "0 9 * * *", // Daily at 9:00 AM (cron format)
+  scrapingSchedule: "0 14 * * *", // Daily at 2:00 PM EST (cron format)
+  
+  // Daily comprehensive scraping configuration
+  dailyScraping: {
+    enabled: true,
+    schedule: "0 14 * * *", // Daily at 2:00 PM EST
+    timeFilter: "day", // Focus on jobs posted in the last 24 hours
+    mode: "comprehensive", // Use comprehensive mode for thorough scraping
+    
+    // Optimization settings for faster scraping
+    optimization: {
+      enabled: true,
+      skipThreshold: 10, // Skip source if it has >= 10 recent jobs in the last hour
+      maxRecentJobsCheck: 50, // Maximum jobs to check for recent activity
+      cacheTimeRange: "hour", // Time range to check for recent jobs (hour, day, week)
+      parallelScraping: true, // Enable parallel scraping for non-dependent sources
+      intelligentSkipping: true, // Skip sources that were recently scraped successfully
+      reuseExistingJobs: true, // Include existing jobs from cache in results
+    },
+    
+    priority: {
+      high: ["linkedin", "github"], // Most important sources
+      medium: ["ziprecruiter"], // Secondary sources  
+      low: ["jobright"] // Additional sources
+    },
+    jobLimits: {
+      linkedin: 75, // Higher limit for LinkedIn (most important)
+      github: 100, // Higher limit for GitHub repos
+      ziprecruiter: 50,
+      jobright: 50
+    },
+    notifications: {
+      start: true, // Notify when scraping starts
+      completion: true, // Notify when scraping completes
+      errors: true, // Notify on errors
+      summary: true // Send daily summary
+    }
+  },
 
   // MongoDB configuration
   mongo: {
@@ -13,21 +50,20 @@ module.exports = {
     dbName: process.env.DB_NAME || "job_scraper_bot",
     collections: {
       linkedin: "linkedin_jobs",
-      simplyhired: "simplyhired_jobs",
       ziprecruiter: "ziprecruiter_jobs",
-      careerjet: "careerjet_jobs",
       jobright: "jobright_jobs",
-      glassdoor: "glassdoor_jobs",
-      dice: "dice_jobs",
       github: "github_jobs",
     },
     maxCacheSize: 5000, // Maximum number of jobs to keep in cache per source - increased for comprehensive scraping
     // Connection settings
-    connectionTimeout: 5000, // 5 seconds
-    serverSelectionTimeout: 5000,
-    socketTimeout: 5000,
+    connectionTimeout: 10000, // 10 seconds - increased for better reliability
+    serverSelectionTimeout: 10000, // 10 seconds - increased for better reliability
+    socketTimeout: 10000, // 10 seconds - increased for better reliability
     retryWrites: true,
     retryReads: true,
+    // SSL/TLS settings for better compatibility
+    ssl: false, // Disable SSL for local development
+    tls: false, // Disable TLS for local development
   },
 
   // Anti-Detection and Security Configuration
@@ -82,19 +118,19 @@ module.exports = {
 
     // Monitoring and alerting
     monitoring: {
-      enabled: true,
-      logDetectionEvents: true,
-      alertOnBlocking: true,
-      trackSuccessRates: true,
-      performanceMetrics: true,
+      enabled: false, // Disabled for efficiency - no screenshot debugging
+      logDetectionEvents: false,
+      alertOnBlocking: false,
+      trackSuccessRates: false,
+      performanceMetrics: false,
     },
   },
 
   // Puppeteer Enhanced Configuration
   puppeteer: {
-    headless: process.env.NODE_ENV === "production" ? "new" : false,
-    devtools: process.env.NODE_ENV !== "production",
-    slowMo: process.env.NODE_ENV !== "production" ? 50 : 0,
+    headless: "new", // Always headless for production efficiency
+    devtools: false, // Disable devtools to prevent screenshot debugging
+    slowMo: 0, // No slow motion for faster execution
 
     // Enhanced stealth arguments
     args: [
@@ -145,168 +181,63 @@ module.exports = {
     ignoreDefaultArgs: ["--enable-automation"],
   },
 
-  // Global job filtering configuration
+  // Global job filtering configuration - Focused on core software/data roles
   jobFiltering: {
-    // Keywords that must be present in job titles (at least one)
+    // Core keywords that must be present in job titles (at least one)
     requiredKeywords: [
-      "software",
-      "data",
-      "frontend",
-      "backend",
-      "fullstack",
-      "full-stack",
-      "full stack",
-      "web",
-      "mobile",
-      "app",
-      "application",
-      "system",
-      "platform",
-      "cloud",
-      "devops",
+      "software engineer",
+      "software developer", 
+      "software development",
+      "data engineer",
+      "data scientist",
       "machine learning",
-      "ml",
-      "ai",
+      "ml engineer",
+      "ai engineer",
       "artificial intelligence",
-      "analytics",
-      "database",
-      "algorithm",
-      "programming",
-      "developer",
-      "development",
-      "engineer",
-      "engineering",
-      "react",
-      "node",
-      "python",
-      "java",
-      "javascript",
-      "typescript",
-      "c++",
-      "c#",
-      "golang",
-      "rust",
-      "kotlin",
-      "swift",
-      "php",
-      "ruby",
-      "scala",
-      "cybersecurity",
-      "security",
-      "infrastructure",
-      "blockchain",
-      "crypto",
-      "fintech",
-      "api",
-      "microservices",
     ],
 
     // Keywords that exclude jobs (if present, job is rejected)
     excludedKeywords: [
-      "geotechnical",
-      "civil",
-      "mechanical",
-      "electrical",
-      "chemical",
-      "biomedical",
-      "environmental",
-      "aerospace",
-      "nuclear",
-      "petroleum",
-      "mining",
-      "construction",
-      "hvac",
-      "plumbing",
-      "welding",
-      "manufacturing",
-      "production",
-      "assembly",
-      "field service",
-      "field engineer",
-      "field technician",
-      "maintenance",
-      "repair",
-      "quality assurance engineer",
-      "qa engineer",
-      "test engineer",
-      "validation engineer",
-      "process engineer",
-      "project engineer",
-      "design engineer",
-      "sales engineer",
-      "application engineer",
-      "field application",
-      "technical support engineer",
-      "hardware engineer",
-      "firmware engineer",
-      "embedded engineer",
-      "rf engineer",
-      "analog engineer",
-      "digital design engineer",
-      "circuit",
-      "pcb",
-      "asic",
-      "fpga",
-      "water resources",
-      "structural",
-      "transportation",
-      "urban planning",
-      "surveying",
-      "materials engineer",
-      "metallurgical",
-      "ceramic",
-      "polymer",
-      "textile",
-      "food engineer",
-      "agricultural",
-      "forest engineer",
-      "packaging engineer",
-      "safety engineer",
-      "compliance engineer",
-      "regulatory engineer",
-      "clinical engineer",
-      "bioprocess",
-      "pharmaceutical",
-      "medical device",
-      "laboratory",
-      "research engineer",
-      "operations engineer",
-      "facility engineer",
-      "building engineer",
-      "energy engineer",
-      "power engineer",
-      "control engineer",
-      "instrumentation",
-      "automation engineer",
-      "industrial engineer",
-      "logistics engineer",
-      "supply chain engineer",
+      // Non-software engineering roles
+      "geotechnical", "civil", "mechanical", "electrical", "chemical", "biomedical",
+      "environmental", "aerospace", "nuclear", "petroleum", "mining", "construction",
+      "hvac", "plumbing", "welding", "manufacturing", "production", "assembly",
+      "field service", "field engineer", "field technician", "maintenance", "repair",
+      "quality assurance engineer", "qa engineer", "test engineer", "validation engineer",
+      "process engineer", "project engineer", "design engineer", "sales engineer",
+      "application engineer", "field application", "technical support engineer",
+      "hardware engineer", "firmware engineer", "embedded engineer", "rf engineer",
+      "analog engineer", "digital design engineer", "circuit", "pcb", "asic", "fpga",
+      "water resources", "structural", "transportation", "urban planning", "surveying",
+      "materials engineer", "metallurgical", "ceramic", "polymer", "textile",
+      "food engineer", "agricultural", "forest engineer", "packaging engineer",
+      "safety engineer", "compliance engineer", "regulatory engineer", "clinical engineer",
+      "bioprocess", "pharmaceutical", "medical device", "laboratory", "research engineer",
+      "operations engineer", "facility engineer", "building engineer", "energy engineer",
+      "power engineer", "control engineer", "instrumentation", "automation engineer",
+      "industrial engineer", "logistics engineer", "supply chain engineer",
+      
+      // Non-engineering roles
+      "manager", "director", "lead", "principal", "senior", "staff", "architect",
+      "consultant", "advisor", "specialist", "coordinator", "assistant", "associate",
+      "internship coordinator", "recruiter", "hr", "human resources", "marketing",
+      "sales", "business", "finance", "accounting", "legal", "compliance", "regulatory",
+      "product manager", "project manager", "program manager", "scrum master",
+      "agile coach", "business analyst", "data analyst", "financial analyst",
+      "operations analyst", "market analyst", "research analyst", "policy analyst",
     ],
 
     // Specific software/data role indicators (if present, job is accepted regardless)
     softwareDataIndicators: [
       "software engineer",
-      "software developer",
+      "software developer", 
       "software development",
       "data engineer",
       "data scientist",
-      "data analyst",
-      "machine learning",
-      "full stack",
-      "frontend",
-      "backend",
-      "web developer",
-      "mobile developer",
-      "devops",
-      "cloud engineer",
-      "platform engineer",
-      "infrastructure engineer",
-      "security engineer",
-      "ai engineer",
+      "machine learning engineer",
       "ml engineer",
-      "backend engineer",
-      "frontend engineer",
-      "fullstack engineer",
+      "ai engineer",
+      "artificial intelligence engineer",
     ],
   },
 
@@ -317,12 +248,10 @@ module.exports = {
   linkedin: {
     jobKeywords: [
       "software engineer intern",
-      "software development intern",
       "software engineer new grad",
       "software engineer entry level",
-      "software engineer graduate",
+      "software development intern",
       "software development new grad",
-      "software development entry level",
       "data engineer intern",
       "data engineer new grad",
       "data engineer entry level",
@@ -330,12 +259,12 @@ module.exports = {
       "data scientist new grad",
       "data scientist entry level",
       "machine learning intern",
-      "machine learning engineer",
-      "full stack developer intern",
-      "frontend engineer intern",
-      "backend engineer intern",
-      "web developer intern",
-      "mobile developer intern",
+      "machine learning engineer intern",
+      "machine learning engineer new grad",
+      "ml engineer intern",
+      "ml engineer new grad",
+      "ai engineer intern",
+      "ai engineer new grad",
     ],
     jobLocations: ["United States"],
     maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
@@ -371,34 +300,7 @@ module.exports = {
     defaultComprehensiveFilter: "week", // Focus on past week for new jobs
   },
 
-  // SimplyHired scraper configuration
-  simplyhired: {
-    jobKeywords: [
-      "software engineer intern",
-      "software engineer new grad",
-      "software engineer entry level",
-      "data engineer intern",
-      "data engineer new grad",
-      "data scientist intern",
-      "machine learning intern",
-      "full stack developer intern",
-      "web developer intern",
-    ],
-    jobLocations: ["United States"],
-    maxJobsPerSearch: 7, // Lightweight for Discord commands
-    maxPages: 3, // Lightweight for Discord commands
-    fileCache: "cache/simplyhired-job-cache.json",
-    embedColor: "#1e90ff",
-    timeFilters: {
-      day: "1",
-      week: "7",
-      month: "30",
-    },
-    jobLimits: {
-      discord: 7, // Lightweight for Discord commands
-      comprehensive: 50, // For internal script execution
-    },
-  },
+
 
   // ZipRecruiter scraper configuration
   ziprecruiter: {
@@ -409,9 +311,11 @@ module.exports = {
       "data engineer intern",
       "data engineer new grad",
       "data scientist intern",
+      "data scientist new grad",
       "machine learning intern",
-      "full stack developer intern",
-      "web developer intern",
+      "machine learning engineer intern",
+      "ml engineer intern",
+      "ai engineer intern",
     ],
     jobLocations: [""],
     maxJobsPerSearch: 8, // Lightweight for Discord commands
@@ -428,32 +332,7 @@ module.exports = {
     },
   },
 
-  // CareerJet scraper configuration
-  careerjet: {
-    jobKeywords: [
-      "software engineer intern",
-      "software engineer new grad",
-      "software engineer entry level",
-      "data engineer intern",
-      "data engineer new grad",
-      "data scientist intern",
-      "machine learning intern",
-      "full stack developer intern",
-      "web developer intern",
-    ],
-    maxJobsPerSearch: 6, // Lightweight for Discord commands
-    fileCache: "cache/careerjet-job-cache.json",
-    embedColor: "#1e90ff",
-    timeFilters: {
-      day: "1",
-      week: "7",
-      month: "30",
-    },
-    jobLimits: {
-      discord: 6, // Lightweight for Discord commands
-      comprehensive: 50, // For internal script execution
-    },
-  },
+
 
   // Jobright.ai scraper configuration
   jobright: {
@@ -472,12 +351,16 @@ module.exports = {
         jobTitle: "Data Scientist",
       },
       {
-        name: "Machine Learning Engineer",
+        name: "Machine Learning Engineer Intern",
         jobTitle: "Machine Learning Engineer",
       },
       {
-        name: "Full Stack Developer",
-        jobTitle: "Full Stack Developer",
+        name: "ML Engineer Intern",
+        jobTitle: "ML Engineer",
+      },
+      {
+        name: "AI Engineer Intern",
+        jobTitle: "AI Engineer",
       },
     ],
     additionalParams:
@@ -491,71 +374,9 @@ module.exports = {
     },
   },
 
-  // Glassdoor scraper configuration
-  glassdoor: {
-    jobKeywords: [
-      "software-engineer-intern",
-      "software-engineer-new-grad",
-      "data-engineer-intern",
-      "data-scientist-intern",
-      "machine-learning-intern",
-      "full-stack-developer-intern",
-      "web-developer-intern",
-    ],
-    jobLocations: ["us"],
-    maxJobsPerSearch: 8, // Lightweight for Discord commands
-    maxJobsToPost: 8, // Lightweight for Discord commands
-    fileCache: "cache/glassdoor-job-cache.json",
-    embedColor: "#0caa41",
-    jobLimits: {
-      discord: 8, // Lightweight for Discord commands
-      comprehensive: 50, // For internal script execution
-    },
-    searchUrls: {
-      day: "https://www.glassdoor.com/Job/us-software-engineer-intern-jobs-SRCH_IL.0,2_IS1_KO3,27_IP1.htm?sortBy=date_desc&fromAge=1",
-      week: "https://www.glassdoor.com/Job/us-software-engineer-intern-jobs-SRCH_IL.0,2_IS1_KO3,27_IP1.htm?sortBy=date_desc&fromAge=7",
-      month:
-        "https://www.glassdoor.com/Job/us-software-engineer-intern-jobs-SRCH_IL.0,2_IS1_KO3,27_IP1.htm?sortBy=date_desc&fromAge=30",
-    },
-  },
 
-  // Dice.com scraper configuration
-  dice: {
-    jobKeywords: [
-      "software engineer intern",
-      "software engineer new grad",
-      "software engineer entry level",
-      "data engineer intern",
-      "data engineer new grad",
-      "data scientist intern",
-      "machine learning intern",
-      "full stack developer intern",
-      "web developer intern",
-    ],
-    maxJobsPerSearch: 7, // Lightweight for Discord commands
-    fileCache: "cache/dice-job-cache.json",
-    embedColor: "#2b2b67",
-    baseUrl: "https://www.dice.com/jobs",
-    defaultSearchParams: {
-      countryCode: "US",
-      radius: "30",
-      radiusUnit: "mi",
-      page: "1",
-      pageSize: "20", // Lightweight for Discord commands
-      language: "en",
-      eid: "8855",
-    },
-    jobLimits: {
-      discord: 7, // Lightweight for Discord commands
-      comprehensive: 50, // For internal script execution
-    },
-    timeFilters: {
-      day: "ONE",
-      threeDay: "THREE",
-      week: "SEVEN",
-      all: "ALL",
-    },
-  },
+
+
 
   // GitHub scraper configuration
   github: {
@@ -582,13 +403,13 @@ module.exports = {
         maxJobsComprehensive: 60, // For internal script execution
         type: "intern",
       },
-      {
-        name: "QuantInternships2026",
-        url: "https://github.com/northwesternfintech/2026QuantInternships",
-        maxJobs: 5, // Lightweight for Discord commands
-        maxJobsComprehensive: 40, // For internal script execution
-        type: "quant",
-      },
+      // {
+      //   name: "QuantInternships2026",
+      //   url: "https://github.com/northwesternfintech/2026QuantInternships",
+      //   maxJobs: 5, // Lightweight for Discord commands
+      //   maxJobsComprehensive: 40, // For internal script execution
+      //   type: "quant",
+      // },
     ],
     fileCache: "cache/github-job-cache.json",
     embedColor: "#1e90ff",
@@ -646,11 +467,11 @@ module.exports = {
 
   // MCP Puppeteer Configuration for AI-Enhanced Scraping
   mcpPuppeteer: {
-    enabled: true, // Set to false to disable AI-enhanced scraping
+    enabled: false, // Disabled for efficiency - no AI-enhanced scraping
     openaiApiKey: process.env.OPENAI_API_KEY, // Required for AI features
     visionModel: process.env.VISION_MODEL || "gpt-4-vision-preview",
     apiBaseUrl: process.env.API_BASE_URL || "https://api.openai.com/v1",
-    headless: true, // Set to false for debugging (shows browser)
+    headless: true, // Always headless for efficiency
     maxInteractionAttempts: 3, // How many times AI tries to bypass obstacles
     waitForNetworkIdle: true, // Wait for page to fully load
     timeoutSeconds: 30,
@@ -669,7 +490,7 @@ module.exports = {
 
   // Message Summarization Configuration
   messageSummarization: {
-    enabled: true,
+    enabled: false, // Disabled for efficiency
     maxMessagesPerSummary: 100,
     maxTokensPerRequest: 12000,
     maxSummaryLength: 1000,
@@ -680,7 +501,7 @@ module.exports = {
     blockedChannels: [], // Channels to block from summarization
     allowedUsers: [], // Empty = all users allowed
     adminOnlyConfig: true,
-    saveSummariesToDb: true,
+    saveSummariesToDb: false, // Don't save summaries to DB for efficiency
     autoCleanupOldSummaries: true,
     cleanupAfterDays: 30,
   },

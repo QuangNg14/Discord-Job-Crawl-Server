@@ -5,14 +5,15 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay, filterRelevantJobs } = require("../utils/helpers");
+const { delay, filterRelevantJobs, filterJobsByDate } = require("../utils/helpers");
 
 /**
  * Scrape a GitHub repository for job listings
  * @param {object} repo - Repository configuration object
+ * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
  * @returns {Array} Array of job posts
  */
-async function scrapeGithubRepo(repo, role = "intern") {
+async function scrapeGithubRepo(repo, role = "intern", timeFilter = "day") {
   logger.log(`Scraping GitHub repo: ${repo.name} (${repo.url})`);
   let browser;
 
@@ -65,7 +66,12 @@ async function scrapeGithubRepo(repo, role = "intern") {
         const location = cells[2].innerText.trim();
         const linkAnchor = cells[3].querySelector("a");
         const link = linkAnchor ? linkAnchor.href : "";
-        const datePosted = cells[4].innerText.trim();
+        const datePosted = cells[4] ? cells[4].innerText.trim() : "";
+        
+        // Skip rows with missing essential data
+        if (!company || !role || !datePosted) {
+          return;
+        }
 
         posts.push({
           repo: repoUrl,
@@ -110,10 +116,15 @@ async function scrapeGithubRepo(repo, role = "intern") {
       };
     });
 
-    // Filter for relevant software/data engineering jobs only
-    processedPosts = filterRelevantJobs(processedPosts, role);
+    // Skip relevance filtering for GitHub repositories - all jobs are already curated and relevant
+    // GitHub repositories contain pre-filtered, high-quality job listings
+    logger.log(`Skipping relevance filtering for GitHub repo ${repo.name} - all ${processedPosts.length} jobs are considered relevant`);
 
-    return processedPosts;
+    // Apply date filtering based on the specified time filter
+    const recentJobs = filterJobsByDate(processedPosts, timeFilter);
+    logger.log(`📅 Date filtering: ${recentJobs.length}/${processedPosts.length} jobs from last ${timeFilter}`);
+
+    return recentJobs;
   } catch (error) {
     logger.log(
       `Error scraping GitHub repo ${repo.name}: ${error.message}`,
@@ -125,37 +136,37 @@ async function scrapeGithubRepo(repo, role = "intern") {
 }
 
 /**
- * Helper: Scrape a single repo and send posts
- * @param {object} repo - Repository configuration object
- * @param {object} client - Discord client
- * @param {string} mode - Scraping mode ("discord" or "comprehensive")
- * @param {string} role - Job role to filter for ("intern" or "new grad")
- * @returns {object} Status object with counts
+ * Scrape a GitHub repository and send results to Discord
+ * @param {object} repo - Repository configuration
+ * @param {object} client - Discord client (optional, if null won't post to Discord)
+ * @param {string} mode - Scraping mode: "discord" or "comprehensive"
+ * @param {string} role - Job role to filter for
+ * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
+ * @returns {object} Result object with jobs array
  */
-async function scrapeRepoAndSend(
-  repo,
-  client,
-  mode = "discord",
-  role = "intern"
-) {
+async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern", timeFilter = "day") {
   const result = {
     lastRun: new Date(),
     success: false,
     errorCount: 0,
     jobsFound: 0,
+    jobs: [] // Add jobs array to return
   };
 
   try {
-    const channel = client.channels.cache.get(config.channelId);
-    if (!channel) {
+    const channel = client?.channels?.cache?.get(config.channelId);
+    
+    if (!channel && mode === "discord") {
       logger.log("Discord channel not found!", "error");
       return result;
     }
 
-    const posts = await scrapeGithubRepo(repo, role);
+    const posts = await scrapeGithubRepo(repo, role, timeFilter);
     if (!posts || posts.length === 0) {
       logger.log(`No posts found in repo ${repo.name}`);
-      await channel.send(`No new posts found for ${repo.name}.`);
+      if (channel && mode === "discord") {
+        await channel.send(`No new posts found for ${repo.name}.`);
+      }
       result.success = true;
       return result;
     }
@@ -167,7 +178,9 @@ async function scrapeRepoAndSend(
 
     if (newPosts.length === 0) {
       logger.log(`No new posts for ${repo.name}`);
-      await channel.send(`No new posts for ${repo.name}.`);
+      if (channel && mode === "discord") {
+        await channel.send(`No new posts for ${repo.name}.`);
+      }
       result.success = true;
       return result;
     }
@@ -182,32 +195,38 @@ async function scrapeRepoAndSend(
     // Add jobs to MongoDB cache
     await mongoService.addJobs(postsToSend, "github");
     result.jobsFound = postsToSend.length;
+    
+    // Add all posts to the jobs array (not just new ones)
+    result.jobs = posts;
 
-    await channel.send(
-      `${repo.name} (${postsToSend.length} new post${
-        postsToSend.length > 1 ? "s" : ""
-      }):`
-    );
+    // Only post to Discord if client is provided and mode is discord
+    if (channel && mode === "discord") {
+      await channel.send(
+        `${repo.name} (${postsToSend.length} new post${
+          postsToSend.length > 1 ? "s" : ""
+        }):`
+      );
 
-    for (const post of postsToSend) {
-      const embed = new EmbedBuilder()
-        .setTitle(post.title)
-        .setURL(post.url)
-        .setColor(config.github.embedColor)
-        .setDescription(post.description)
-        .addFields({ name: "Date", value: post.postedDate, inline: true })
-        .setFooter({
-          text: `Source: ${post.source} | ID: ${post.id.substring(0, 10)}`,
-        });
+      for (const post of postsToSend) {
+        const embed = new EmbedBuilder()
+          .setTitle(post.title)
+          .setURL(post.url)
+          .setColor(config.github.embedColor)
+          .setDescription(post.description)
+          .addFields({ name: "Date", value: post.postedDate, inline: true })
+          .setFooter({
+            text: `Source: ${post.source} | ID: ${post.id.substring(0, 10)}`,
+          });
 
-      try {
-        await channel.send({ embeds: [embed] });
-      } catch (err) {
-        logger.log(`Error sending post: ${err.message}`, "error");
-        result.errorCount++;
+        try {
+          await channel.send({ embeds: [embed] });
+        } catch (err) {
+          logger.log(`Error sending post: ${err.message}`, "error");
+          result.errorCount++;
+        }
+
+        await delay(1000);
       }
-
-      await delay(1000);
     }
 
     result.success = true;
@@ -221,40 +240,50 @@ async function scrapeRepoAndSend(
 
 /**
  * Main function to scrape all GitHub repositories
- * @param {object} client - Discord client
- * @returns {object} Status object
+ * @param {object} client - Discord client (optional, if null won't post to Discord)
+ * @param {string} mode - Scraping mode: "discord" or "comprehensive"
+ * @param {string} role - Role type: "intern" or "new grad"
+ * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
+ * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(client, mode = "discord", role = "intern") {
+async function scrapeAllJobs(client, mode = "discord", role = "intern", timeFilter = "day") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
     errorCount: 0,
     jobsFound: 0,
+    jobs: [] // Add jobs array to return
   };
 
   logger.log("Starting GitHub scraping process");
 
   try {
-    const channel = client.channels.cache.get(config.channelId);
-    if (!channel) {
-      logger.log(`Channel with ID ${config.channelId} not found`, "error");
-      return lastRunStatus;
+    const channel = client?.channels?.cache?.get(config.channelId);
+    
+    if (channel && mode === "discord") {
+      await channel.send("GitHub - Internship Posts Update");
     }
-
-    await channel.send("GitHub - Internship Posts Update");
 
     // Process each repo and collect results
     for (const repo of config.github.repos) {
-      const repoResult = await scrapeRepoAndSend(repo, client, mode, role);
+      const repoResult = await scrapeRepoAndSend(repo, client, mode, role, timeFilter);
       lastRunStatus.jobsFound += repoResult.jobsFound;
       lastRunStatus.errorCount += repoResult.errorCount;
+      
+      // Add jobs from this repo to the total jobs array
+      if (repoResult.jobs) {
+        lastRunStatus.jobs.push(...repoResult.jobs);
+      }
     }
 
-    await channel.send(
-      `GitHub scraping complete. Found ${lastRunStatus.jobsFound} new posts.`
-    );
+    if (channel && mode === "discord") {
+      await channel.send(
+        `GitHub scraping complete. Found ${lastRunStatus.jobsFound} new posts.`
+      );
+    }
+    
     lastRunStatus.success = true;
-    logger.log("GitHub scraping process completed successfully.");
+    logger.log(`GitHub scraping process completed successfully. Found ${lastRunStatus.jobsFound} new posts, collected ${lastRunStatus.jobs.length} total relevant jobs.`);
 
     return lastRunStatus;
   } catch (error) {
@@ -273,13 +302,15 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern") {
  * @param {object} client - Discord client
  * @param {string} mode - Scraping mode ("discord" or "comprehensive")
  * @param {string} role - Job role to filter for ("intern" or "new grad")
+ * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
  * @returns {object} Status object
  */
 async function scrapeSpecificRepo(
   repoName,
   client,
   mode = "discord",
-  role = "intern"
+  role = "intern",
+  timeFilter = "day"
 ) {
   logger.log(`Looking for repo with name: ${repoName}`);
 
@@ -297,10 +328,31 @@ async function scrapeSpecificRepo(
     };
   }
 
-  return await scrapeRepoAndSend(repo, client, mode, role);
+  return await scrapeRepoAndSend(repo, client, mode, role, timeFilter);
+}
+
+/**
+ * Scrape a specific repository (alias for scrapeSpecificRepo for backward compatibility)
+ * @param {string} repoName - Name of the repository to scrape
+ * @param {object} client - Discord client
+ * @param {string} mode - Scraping mode ("discord" or "comprehensive")
+ * @param {string} role - Job role to filter for ("intern" or "new grad")
+ * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
+ * @returns {object} Status object
+ */
+async function scrapeRepository(
+  repoName,
+  client,
+  mode = "discord",
+  role = "intern",
+  timeFilter = "day"
+) {
+  return await scrapeSpecificRepo(repoName, client, mode, role, timeFilter);
 }
 
 module.exports = {
   scrapeAllJobs,
   scrapeSpecificRepo,
+  scrapeRepository,
+  scrapeGithubRepo,
 };

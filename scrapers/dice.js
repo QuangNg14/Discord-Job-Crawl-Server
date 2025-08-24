@@ -251,80 +251,55 @@ async function scrapeDice(searchUrl, maxJobs) {
 
 /**
  * Main function to scrape Dice.com jobs
- * @param {string} timeFilter - Time filter value
- * @param {object} client - Discord client
- * @returns {object} Status object
+ * @param {string} timeFilter - Time filter for search
+ * @param {object} client - Discord client (optional, if null won't post to Discord)
+ * @param {string} mode - Scraping mode: "discord" or "comprehensive"
+ * @param {string} role - Role type: "intern" or "new grad"
+ * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(
-  timeFilter = null,
-  client,
-  mode = "discord",
-  role = "intern"
-) {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
     errorCount: 0,
     jobsFound: 0,
+    jobs: [] // Add jobs array to return
   };
 
-  const diceTimeFilter = timeFilter || config.dice.timeFilters.day;
-  logger.log(
-    `Starting Dice.com job scraping process with time filter: ${diceTimeFilter}`
-  );
+  logger.log("Starting Dice.com job scraping process");
 
   try {
-    const channel = client.channels.cache.get(config.channelId);
-    if (!channel) {
-      logger.log(`Channel with ID ${config.channelId} not found`, "error");
-      return lastRunStatus;
+    const channel = client?.channels?.cache?.get(config.channelId);
+    
+    if (channel && mode === "discord") {
+      await channel.send("Dice.com Job Postings Update");
     }
 
-    // Generate a human-readable time filter description
-    let timeFilterDescription = "";
-    switch (diceTimeFilter) {
-      case config.dice.timeFilters.day:
-        timeFilterDescription = "today";
-        break;
-      case config.dice.timeFilters.threeDay:
-        timeFilterDescription = "in the last 3 days";
-        break;
-      case config.dice.timeFilters.week:
-        timeFilterDescription = "in the last 7 days";
-        break;
-      case config.dice.timeFilters.all:
-        timeFilterDescription = "any date";
-        break;
-      default:
-        timeFilterDescription = diceTimeFilter;
-    }
-
-    await channel.send(
-      `Dice.com Job Postings Update (Posted ${timeFilterDescription})`
-    );
-
-    // Process each keyword
-    // Use all keywords from config (role filtering applied in job processing)
-    const allKeywords = config.dice.jobKeywords;
-    logger.log(
-      `Using ${allKeywords.length} keywords for Dice search (filtering for ${role} roles)`
-    );
-
-    for (const keyword of allKeywords) {
+    // Loop through each keyword
+    for (const keyword of config.dice.jobKeywords) {
       try {
-        const searchUrl = buildDiceSearchUrl(keyword, diceTimeFilter);
-        logger.log(
-          `Scraping Dice.com for "${keyword}" with time filter: ${diceTimeFilter}`
-        );
+        const encodedKeyword = encodeURIComponent(keyword);
+        logger.log(`Encoded keyword: ${encodedKeyword}`);
+
+        // Build the search URL
+        const searchParams = new URLSearchParams({
+          q: keyword,
+          ...config.dice.defaultSearchParams,
+          fromAge: timeFilter
+        });
+        const searchUrl = `${config.dice.baseUrl}?${searchParams.toString()}`;
+        logger.log(`Scraping Dice.com for "${keyword}"`);
         logger.log(`Search URL: ${searchUrl}`);
 
-        // Determine job limit based on mode (discord = lightweight, comprehensive = thorough)
-        const jobLimit =
-          mode === "comprehensive"
-            ? config.dice.jobLimits.comprehensive
-            : config.dice.jobLimits.discord;
-        const jobs = await scrapeDice(searchUrl, jobLimit);
+        // Determine job limit based on mode
+        const jobLimit = mode === "comprehensive" 
+          ? config.dice.jobLimits.comprehensive 
+          : config.dice.jobLimits.discord;
 
+        // Scrape all available job postings
+        const jobs = await scrapeDice(searchUrl);
+        logger.log(`Raw jobs found for "${keyword}": ${jobs.length}`);
+        
         if (!jobs || jobs.length === 0) {
           logger.log(`No jobs found for "${keyword}"`);
           continue;
@@ -332,6 +307,8 @@ async function scrapeAllJobs(
 
         // Filter for relevant software/data engineering jobs only
         const relevantJobs = filterRelevantJobs(jobs, role);
+        logger.log(`Relevant jobs for "${keyword}": ${relevantJobs.length}`);
+        
         if (relevantJobs.length === 0) {
           logger.log(`No relevant software/data jobs found for "${keyword}"`);
           continue;
@@ -342,44 +319,56 @@ async function scrapeAllJobs(
           (job) => !mongoService.jobExists(job.id, "dice")
         );
 
-        if (newJobs.length === 0) {
-          logger.log(`No new relevant jobs for "${keyword}"`);
-          continue;
-        }
-
-        // Add jobs to MongoDB cache
-        await mongoService.addJobs(newJobs, "dice");
-        lastRunStatus.jobsFound += newJobs.length;
-
-        await channel.send(
-          `Dice.com - ${keyword} (${newJobs.length} new postings)`
+        logger.log(
+          `Found ${jobs.length} total jobs, ${relevantJobs.length} relevant jobs, ${newJobs.length} new jobs for "${keyword}"`
         );
 
-        // Send each job as a separate embed message
-        for (const job of newJobs) {
-          const embed = new EmbedBuilder()
-            .setTitle(job.title || `Software Engineering Position`)
-            .setURL(job.url || searchUrl) // Always include a URL
-            .setColor(config.dice.embedColor) // Dice.com brand color
-            .setDescription(job.company || "Visit link for more details")
-            .addFields(
-              {
-                name: "Location",
-                value: job.location || "Check job details",
-                inline: true,
-              },
-              {
-                name: "Posted",
-                value: job.postedDate || timeFilterDescription,
-                inline: true,
-              }
-            )
-            .setFooter({
-              text: `Source: Dice.com | ID: ${job.id.substring(0, 10)}`,
-            });
+        // Add new jobs to the cache
+        if (newJobs.length > 0) {
+          await mongoService.addJobs(newJobs, "dice");
+        }
 
-          await channel.send({ embeds: [embed] });
-          await delay(1000); // Wait between messages to avoid rate limits
+        // Add all relevant jobs to the return array (not just new ones)
+        lastRunStatus.jobs.push(...relevantJobs);
+        lastRunStatus.jobsFound += newJobs.length;
+
+        // Only post to Discord if client is provided and mode is discord
+        if (channel && mode === "discord" && newJobs.length > 0) {
+          await channel.send(
+            `Dice.com - ${keyword} (${newJobs.length} new postings)`
+          );
+
+          // Limit Discord output to prevent spam
+          const jobsToShow = newJobs.slice(0, jobLimit);
+
+          for (const job of jobsToShow) {
+            if (!job.title || !job.url) continue;
+            const embed = new EmbedBuilder()
+              .setTitle(job.title)
+              .setURL(job.url)
+              .setColor(config.dice.embedColor)
+              .setDescription(job.company)
+              .addFields(
+                { name: "Location", value: job.location, inline: true },
+                { name: "Posted", value: job.postedDate, inline: true }
+              )
+              .setFooter({
+                text: `Source: Dice.com | ID: ${job.id.substring(0, 10)}`,
+              });
+            await channel.send({ embeds: [embed] });
+            await delay(1000);
+          }
+
+          // If there are more jobs in comprehensive mode, mention it
+          if (newJobs.length > jobsToShow.length) {
+            await channel.send(
+              `... and ${
+                newJobs.length - jobsToShow.length
+              } more jobs added to database`
+            );
+          }
+        } else if (newJobs.length === 0) {
+          logger.log(`No new jobs for "${keyword}"`);
         }
       } catch (error) {
         lastRunStatus.errorCount++;
@@ -387,31 +376,35 @@ async function scrapeAllJobs(
           `Error scraping for "${keyword}": ${error.message}`,
           "error"
         );
-        try {
-          await channel.send(
-            `Error scraping Dice.com for ${keyword} - ${error.message.substring(
-              0,
-              100
-            )}`
-          );
-        } catch (msgError) {
-          logger.log(
-            `Failed to send error message: ${msgError.message}`,
-            "error"
-          );
+        if (channel && mode === "discord") {
+          try {
+            await channel.send(
+              `Error scraping Dice.com for ${keyword} - ${error.message.substring(
+                0,
+                100
+              )}`
+            );
+          } catch (msgError) {
+            logger.log(
+              `Failed to send error message: ${msgError.message}`,
+              "error"
+            );
+          }
         }
       }
-
       // Delay between searches to reduce detection risk
       await delay(5000);
     }
 
-    await channel.send(
-      `Dice.com job scraping complete. Found ${lastRunStatus.jobsFound} new jobs.`
-    );
+    if (channel && mode === "discord") {
+      await channel.send(
+        `Dice.com job scraping complete. Found ${lastRunStatus.jobsFound} new jobs.`
+      );
+    }
+    
     lastRunStatus.success = true;
     logger.log(
-      `Dice.com job scraping completed successfully. Found ${lastRunStatus.jobsFound} new jobs.`
+      `Dice.com job scraping completed successfully. Found ${lastRunStatus.jobsFound} new jobs, collected ${lastRunStatus.jobs.length} total relevant jobs.`
     );
 
     return lastRunStatus;

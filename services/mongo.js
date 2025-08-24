@@ -24,7 +24,26 @@ const jobCaches = {
 async function connect() {
   try {
     logger.log("Connecting to MongoDB...");
-    mongoClient = new MongoClient(config.mongo.uri);
+    
+    // Enhanced MongoDB connection options to handle SSL/TLS issues
+    const mongoOptions = {
+      serverSelectionTimeoutMS: config.mongo.serverSelectionTimeout || 5000,
+      connectTimeoutMS: config.mongo.connectionTimeout || 5000,
+      socketTimeoutMS: config.mongo.socketTimeout || 5000,
+      retryWrites: config.mongo.retryWrites || true,
+      retryReads: config.mongo.retryReads || true,
+      // SSL/TLS configuration - simplified for local development
+      ssl: false, // Disable SSL for local development
+      tls: false, // Disable TLS for local development
+    };
+
+    // If using MongoDB Atlas or remote MongoDB with SSL, enable SSL
+    if (config.mongo.uri.includes('mongodb+srv://') || config.mongo.uri.includes('ssl=true')) {
+      mongoOptions.ssl = true;
+      mongoOptions.tls = true;
+    }
+
+    mongoClient = new MongoClient(config.mongo.uri, mongoOptions);
     await mongoClient.connect();
     db = mongoClient.db(config.mongo.dbName);
 
@@ -138,19 +157,129 @@ function getFileCachePath(source) {
 
 // Check if a job exists in the cache
 function jobExists(jobId, source) {
-  return jobCaches[source].has(jobId);
+  const exists = jobCaches[source].has(jobId);
+  if (config.debugMode) {
+    logger.log(`Checking if job ${jobId} exists in ${source} cache: ${exists}`);
+  }
+  return exists;
+}
+
+// Check if a job exists by normalized ID (for cross-source deduplication)
+async function jobExistsByNormalizedId(normalizedId) {
+  try {
+    // Check all collections for the normalized ID
+    for (const [source, collection] of Object.entries(collections)) {
+      if (collection) {
+        const existingJob = await collection.findOne({ normalizedId });
+        if (existingJob) {
+          return { exists: true, source, job: existingJob };
+        }
+      }
+    }
+    return { exists: false, source: null, job: null };
+  } catch (error) {
+    logger.log(`Error checking normalized job ID: ${error.message}`, "error");
+    return { exists: false, source: null, job: null };
+  }
+}
+
+// Get recent jobs from a specific source (within time range)
+async function getRecentJobs(source, timeRange = "day") {
+  try {
+    if (!collections[source]) {
+      return [];
+    }
+
+    const now = new Date();
+    let startDate;
+
+    switch (timeRange) {
+      case "hour":
+        startDate = new Date(now - 60 * 60 * 1000);
+        break;
+      case "day":
+        startDate = new Date(now - 24 * 60 * 60 * 1000);
+        break;
+      case "week":
+        startDate = new Date(now - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case "month":
+        startDate = new Date(now - 30 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        startDate = new Date(now - 24 * 60 * 60 * 1000);
+    }
+
+    const recentJobs = await collections[source]
+      .find({
+        scrapedAt: { $gte: startDate }
+      })
+      .project({ jobId: 1, normalizedId: 1, title: 1, company: 1, location: 1, scrapedAt: 1 })
+      .toArray();
+
+    logger.log(`Found ${recentJobs.length} recent jobs in ${source} (${timeRange})`);
+    return recentJobs;
+  } catch (error) {
+    logger.log(`Error getting recent jobs from ${source}: ${error.message}`, "error");
+    return [];
+  }
+}
+
+// Get all recent jobs across all sources
+async function getAllRecentJobs(timeRange = "day") {
+  try {
+    const allRecentJobs = {};
+    let totalRecentJobs = 0;
+
+    for (const source of Object.keys(collections)) {
+      const recentJobs = await getRecentJobs(source, timeRange);
+      allRecentJobs[source] = recentJobs;
+      totalRecentJobs += recentJobs.length;
+    }
+
+    logger.log(`Total recent jobs across all sources (${timeRange}): ${totalRecentJobs}`);
+    return { allRecentJobs, totalRecentJobs };
+  } catch (error) {
+    logger.log(`Error getting all recent jobs: ${error.message}`, "error");
+    return { allRecentJobs: {}, totalRecentJobs: 0 };
+  }
+}
+
+// Check if we should skip scraping a source based on recent activity
+async function shouldSkipSource(source, timeRange = "hour") {
+  try {
+    const recentJobs = await getRecentJobs(source, timeRange);
+    const skipThreshold = config.dailyScraping?.skipThreshold || 10;
+    
+    if (recentJobs.length >= skipThreshold) {
+      logger.log(`Skipping ${source} - found ${recentJobs.length} recent jobs (threshold: ${skipThreshold})`);
+      return { shouldSkip: true, reason: `Found ${recentJobs.length} recent jobs`, recentCount: recentJobs.length };
+    }
+    
+    return { shouldSkip: false, reason: "No recent jobs found", recentCount: recentJobs.length };
+  } catch (error) {
+    logger.log(`Error checking if should skip ${source}: ${error.message}`, "error");
+    return { shouldSkip: false, reason: "Error occurred", recentCount: 0 };
+  }
 }
 
 // Add multiple jobs to MongoDB cache
 async function addJobs(jobs, source) {
   try {
-    if (!jobs || jobs.length === 0) return 0;
+    if (!jobs || jobs.length === 0) {
+      logger.log(`No jobs to add for ${source}`);
+      return 0;
+    }
+
+    logger.log(`Adding ${jobs.length} jobs to ${source} cache`);
 
     // Extract job IDs
     const jobIds = jobs.map((job) => job.id);
 
     // Always update in-memory cache
     jobIds.forEach((jobId) => jobCaches[source].add(jobId));
+
+    logger.log(`Updated in-memory cache for ${source}. Total jobs in cache: ${jobCaches[source].size}`);
 
     // If MongoDB is connected, store there
     if (collections[source]) {
@@ -195,6 +324,7 @@ async function addJobs(jobs, source) {
     }
     // Fallback to file if MongoDB not available
     else {
+      logger.log(`MongoDB not available, saving ${source} jobs to file cache`);
       saveToFile(source);
     }
 
@@ -435,6 +565,10 @@ module.exports = {
   connect,
   loadCache,
   jobExists,
+  jobExistsByNormalizedId,
+  getRecentJobs,
+  getAllRecentJobs,
+  shouldSkipSource,
   addJobs,
   clearCache,
   clearAllCaches,

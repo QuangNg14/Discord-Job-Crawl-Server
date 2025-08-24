@@ -462,48 +462,170 @@ async function scrapeMultipleUrls(urls, client, role = "intern") {
 
 /**
  * Main function to scrape Glassdoor jobs
- * @param {string} timeFilter - Time filter (day, week, month)
- * @param {object} client - Discord client
- * @returns {object} Status object
+ * @param {string} timeFilter - Time filter for search
+ * @param {object} client - Discord client (optional, if null won't post to Discord)
+ * @param {string} mode - Scraping mode: "discord" or "comprehensive"
+ * @param {string} role - Role type: "intern" or "new grad"
+ * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(
-  timeFilter = "day",
-  client,
-  mode = "discord",
-  role = "intern"
-) {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
+  const lastRunStatus = {
+    lastRun: new Date(),
+    success: false,
+    errorCount: 0,
+    jobsFound: 0,
+    jobs: [] // Add jobs array to return
+  };
+
   logger.log("Starting Glassdoor job scraping process");
 
   try {
-    // Get the appropriate search URL based on time filter (role filtering applied in job processing)
-    logger.log(`Using Glassdoor search URLs (filtering for ${role} roles)`);
-
-    let searchUrl;
-    switch (timeFilter) {
-      case "week":
-        searchUrl = config.glassdoor.searchUrls.week;
-        break;
-      case "month":
-        searchUrl = config.glassdoor.searchUrls.month;
-        break;
-      case "day":
-      default:
-        searchUrl = config.glassdoor.searchUrls.day;
-        break;
+    const channel = client?.channels?.cache?.get(config.channelId);
+    
+    if (channel && mode === "discord") {
+      await channel.send("Glassdoor Job Postings Update");
     }
 
-    return await scrapeMultipleUrls([searchUrl], client, role);
+    // Loop through each keyword and location
+    for (const keyword of config.glassdoor.jobKeywords) {
+      for (const location of config.glassdoor.jobLocations) {
+        try {
+          const encodedKeyword = encodeURIComponent(keyword);
+          const encodedLocation = encodeURIComponent(location);
+          logger.log(
+            `Encoded keyword: ${encodedKeyword}, Encoded location: ${encodedLocation}`
+          );
+
+          // Build the search URL
+          const searchUrl = config.glassdoor.searchUrls[timeFilter] || config.glassdoor.searchUrls.day;
+          logger.log(`Scraping Glassdoor for "${keyword}" in "${location}"`);
+          logger.log(`Search URL: ${searchUrl}`);
+
+          // Determine job limit based on mode
+          const jobLimit = mode === "comprehensive" 
+            ? config.glassdoor.jobLimits.comprehensive 
+            : config.glassdoor.jobLimits.discord;
+
+          // Scrape all available job postings
+          const jobs = await scrapeGlassdoor(searchUrl);
+          logger.log(`Raw jobs found for "${keyword}": ${jobs.length}`);
+          
+          if (!jobs || jobs.length === 0) {
+            logger.log(`No jobs found for "${keyword}"`);
+            continue;
+          }
+
+          // Filter for relevant software/data engineering jobs only
+          const relevantJobs = filterRelevantJobs(jobs, role);
+          logger.log(`Relevant jobs for "${keyword}": ${relevantJobs.length}`);
+          
+          if (relevantJobs.length === 0) {
+            logger.log(`No relevant software/data jobs found for "${keyword}"`);
+            continue;
+          }
+
+          // Filter out jobs already in cache
+          const newJobs = relevantJobs.filter(
+            (job) => !mongoService.jobExists(job.id, "glassdoor")
+          );
+
+          logger.log(
+            `Found ${jobs.length} total jobs, ${relevantJobs.length} relevant jobs, ${newJobs.length} new jobs for "${keyword}" in "${location}"`
+          );
+
+          // Add new jobs to the cache
+          if (newJobs.length > 0) {
+            await mongoService.addJobs(newJobs, "glassdoor");
+          }
+
+          // Add all relevant jobs to the return array (not just new ones)
+          lastRunStatus.jobs.push(...relevantJobs);
+          lastRunStatus.jobsFound += newJobs.length;
+
+          // Only post to Discord if client is provided and mode is discord
+          if (channel && mode === "discord" && newJobs.length > 0) {
+            await channel.send(
+              `Glassdoor - ${keyword} in ${location} (${newJobs.length} new postings)`
+            );
+
+            // Limit Discord output to prevent spam
+            const jobsToShow = newJobs.slice(0, jobLimit);
+
+            for (const job of jobsToShow) {
+              if (!job.title || !job.url) continue;
+              const embed = new EmbedBuilder()
+                .setTitle(job.title)
+                .setURL(job.url)
+                .setColor(config.glassdoor.embedColor)
+                .setDescription(job.company)
+                .addFields(
+                  { name: "Location", value: job.location, inline: true },
+                  { name: "Posted", value: job.postedDate, inline: true }
+                )
+                .setFooter({
+                  text: `Source: Glassdoor | ID: ${job.id.substring(0, 10)}`,
+                });
+              await channel.send({ embeds: [embed] });
+              await delay(1000);
+            }
+
+            // If there are more jobs in comprehensive mode, mention it
+            if (newJobs.length > jobsToShow.length) {
+              await channel.send(
+                `... and ${
+                  newJobs.length - jobsToShow.length
+                } more jobs added to database`
+              );
+            }
+          } else if (newJobs.length === 0) {
+            logger.log(`No new jobs for "${keyword}" in "${location}"`);
+          }
+        } catch (error) {
+          lastRunStatus.errorCount++;
+          logger.log(
+            `Error scraping for "${keyword}" in "${location}": ${error.message}`,
+            "error"
+          );
+          if (channel && mode === "discord") {
+            try {
+              await channel.send(
+                `Error scraping Glassdoor for ${keyword} in ${location} - ${error.message.substring(
+                  0,
+                  100
+                )}`
+              );
+            } catch (msgError) {
+              logger.log(
+                `Failed to send error message: ${msgError.message}`,
+                "error"
+              );
+            }
+          }
+        }
+        // Delay between searches to reduce detection risk
+        await delay(5000);
+      }
+    }
+
+    if (channel && mode === "discord") {
+      await channel.send(
+        `Glassdoor job scraping complete. Found ${lastRunStatus.jobsFound} new jobs.`
+      );
+    }
+    
+    lastRunStatus.success = true;
+    logger.log(
+      `Glassdoor job scraping completed successfully. Found ${lastRunStatus.jobsFound} new jobs, collected ${lastRunStatus.jobs.length} total relevant jobs.`
+    );
+
+    return lastRunStatus;
   } catch (error) {
+    lastRunStatus.success = false;
     logger.log(
       `Critical error in Glassdoor scrapeAllJobs: ${error.message}`,
       "error"
     );
-    return {
-      lastRun: new Date(),
-      success: false,
-      errorCount: 1,
-      jobsFound: 0,
-    };
+    return lastRunStatus;
   }
 }
 

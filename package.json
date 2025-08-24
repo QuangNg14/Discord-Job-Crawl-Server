@@ -6,8 +6,21 @@
     "scripts": {
         "start": "node server.js",
         "scrape": "node scrape.js",
+        "daily": "node daily-scraper.js",
+        "daily:now": "node daily-scraper.js --run-now",
+        "test:optimization": "node test-optimization.js",
+        "setup:mongodb": "node setup-mongodb.js",
+        "test:github": "node test-github-scraper.js",
+        "test:github:discord": "node test-github-scraper.js discord",
+        "test:improvements": "node test-scraper-improvements.js",
+        "test:date-filtering": "node test-date-filtering.js",
+        "test:github-date-filtering": "node test-github-date-filtering.js",
+        "test:github-age-format": "node test-github-age-format.js",
+        "test:github-date-filtering-updated": "node test-github-date-filtering-updated.js",
+        "test:github-age-parsing": "node test-github-age-parsing.js",
         "dev": "nodemon server.js",
-        "dev:scrape": "nodemon scrape.js"
+        "dev:scrape": "nodemon scrape.js",
+        "dev:daily": "nodemon daily-scraper.js"
     },
     "keywords": [
         "discord",

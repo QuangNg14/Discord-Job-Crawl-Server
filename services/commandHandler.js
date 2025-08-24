@@ -675,16 +675,57 @@ async function executeCommand(command, options, client) {
         const resultGithub = await githubScraper.scrapeAllJobs(
           client,
           "discord",
-          options.role || "intern"
+          options.role || "intern",
+          options.timeFilter || "day"
         );
         commandStatus.github = resultGithub;
         return resultGithub;
+      case "daily":
+        // Import the daily scraper function
+        const { runDailyComprehensiveScrape } = require("../daily-scraper");
+        
+        const dailyChannel = client.channels.cache.get(config.channelId);
+        if (dailyChannel) {
+          await dailyChannel.send("🚀 Starting daily comprehensive scraping of all sources...");
+        }
+        
+        try {
+          const dailyResults = await runDailyComprehensiveScrape(client);
+          
+          // Update command status for all sources
+          dailyResults.successful.forEach(source => {
+            if (commandStatus[source.name.toLowerCase()]) {
+              commandStatus[source.name.toLowerCase()] = {
+                lastRun: new Date(),
+                success: true,
+                jobsFound: dailyResults.totalJobsFound,
+                errorCount: 0
+              };
+            }
+          });
+          
+          return {
+            success: true,
+            jobsFound: dailyResults.totalJobsFound,
+            duration: dailyResults.duration,
+            successful: dailyResults.successful.length,
+            failed: dailyResults.failed.length
+          };
+        } catch (error) {
+          logger.log(`Daily scraping failed: ${error.message}`, "error");
+          return {
+            success: false,
+            error: error.message,
+            jobsFound: 0
+          };
+        }
       case "jobsgithubspecific":
         const resultGithubSpecific = await githubScraper.scrapeSpecificRepo(
           options.repoName,
           client,
           "discord",
-          options.role || "intern"
+          options.role || "intern",
+          options.timeFilter || "day"
         );
         // Update command status but only for successfully scraped repos
         if (resultGithubSpecific.success) {
@@ -1173,6 +1214,7 @@ async function handleSlash(interaction, client) {
       glassdoor: "jobsglassdoor",
       dice: "jobsdice",
       github: "jobsgithub",
+      daily: "daily",
       status: "status",
       clearcache: "clearcache",
     };
@@ -1210,6 +1252,9 @@ async function handleSlash(interaction, client) {
       if (repo) {
         commandOptions = { repo };
       }
+    } else if (legacyCommand === "daily") {
+      const runNow = options.getBoolean("now") || false;
+      commandOptions = { runNow };
     } else if (legacyCommand === "clearcache") {
       const source = options.getString("source");
       if (source) {

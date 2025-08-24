@@ -217,6 +217,17 @@ async function registerSlashCommands() {
           )
       ),
 
+    // Daily scraping command
+    new SlashCommandBuilder()
+      .setName("daily")
+      .setDescription("Run daily comprehensive scraping of all sources")
+      .addBooleanOption((opt) =>
+        opt
+          .setName("now")
+          .setDescription("Run immediately (default: false)")
+          .setRequired(false)
+      ),
+
     // Status command
     new SlashCommandBuilder()
       .setName("status")

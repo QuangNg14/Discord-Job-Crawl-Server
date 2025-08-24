@@ -1,86 +1,493 @@
-const config = require("../config");
+const crypto = require("crypto");
+const loggerService = require("../services/logger");
 
 /**
- * Delay function for adding wait times between operations
- * @param {number} ms - Milliseconds to delay
- * @returns {Promise} Promise that resolves after the delay
+ * Generate a unique job ID based on job data
+ * @param {object} job - Job object
+ * @returns {string} Unique job ID
  */
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function generateJobId(job) {
+  const jobData = `${job.title || ""}-${job.company || ""}-${job.location || ""}`;
+  return crypto.createHash("md5").update(jobData.toLowerCase().trim()).digest("hex");
 }
 
 /**
- * Filter job titles to ensure only software/data engineering related positions
- * @param {string} title - Job title to filter
- * @param {string} company - Company name (optional, for additional context)
- * @param {string} description - Job description (optional, for additional context)
- * @param {string} role - Role type: 'intern' or 'new grad' (optional, for role-specific filtering)
- * @returns {boolean} True if job should be included, false if filtered out
+ * Normalize job data for better deduplication
+ * @param {object} job - Job object
+ * @returns {object} Normalized job object
  */
-function isRelevantJob(title, company = "", description = "", role = null) {
-  if (!title || typeof title !== "string") {
+function normalizeJob(job) {
+  return {
+    ...job,
+    title: (job.title || "").toLowerCase().trim(),
+    company: (job.company || "").toLowerCase().trim(),
+    location: (job.location || "").toLowerCase().trim(),
+    normalizedId: generateJobId(job)
+  };
+}
+
+/**
+ * Deduplicate jobs across all sources
+ * @param {Array} allJobs - Array of job objects from all sources
+ * @returns {Array} Deduplicated jobs
+ */
+function deduplicateJobs(allJobs) {
+  const seenJobs = new Map();
+  const deduplicatedJobs = [];
+
+  for (const job of allJobs) {
+    const normalizedJob = normalizeJob(job);
+    const jobId = normalizedJob.normalizedId;
+
+    if (!seenJobs.has(jobId)) {
+      // First time seeing this job
+      seenJobs.set(jobId, {
+        ...job,
+        sources: [job.source],
+        firstSeen: job.postedDate || new Date().toISOString(),
+        normalizedId: jobId
+      });
+      deduplicatedJobs.push(seenJobs.get(jobId));
+    } else {
+      // Job already exists, add source if different
+      const existingJob = seenJobs.get(jobId);
+      if (!existingJob.sources.includes(job.source)) {
+        existingJob.sources.push(job.source);
+      }
+      // Keep the earliest posted date
+      if (job.postedDate && (!existingJob.firstSeen || job.postedDate < existingJob.firstSeen)) {
+        existingJob.firstSeen = job.postedDate;
+      }
+    }
+  }
+
+  return deduplicatedJobs;
+}
+
+/**
+ * Sort jobs by relevance and recency
+ * @param {Array} jobs - Array of job objects
+ * @returns {Array} Sorted jobs
+ */
+function sortJobsByRelevance(jobs) {
+  return jobs.sort((a, b) => {
+    // First, sort by number of sources (more sources = more relevant)
+    const sourceDiff = (b.sources?.length || 1) - (a.sources?.length || 1);
+    if (sourceDiff !== 0) return sourceDiff;
+
+    // Then by posted date (newer first)
+    const dateA = new Date(a.firstSeen || a.postedDate || 0);
+    const dateB = new Date(b.firstSeen || b.postedDate || 0);
+    return dateB - dateA;
+
+    // Finally by title relevance (intern/new grad first)
+    const titleA = (a.title || "").toLowerCase();
+    const titleB = (b.title || "").toLowerCase();
+    const internA = titleA.includes("intern");
+    const internB = titleB.includes("intern");
+    if (internA && !internB) return -1;
+    if (!internA && internB) return 1;
+  });
+}
+
+/**
+ * Format job for Discord message
+ * @param {object} job - Job object
+ * @param {number} index - Job index
+ * @returns {string} Formatted job string
+ */
+function formatJobForDiscord(job, index) {
+  const title = job.title || "Unknown Position";
+  const company = job.company || "Unknown Company";
+  const location = job.location || "Remote";
+  const sources = job.sources?.length > 1 ? ` (${job.sources.join(", ")})` : "";
+  const date = job.firstSeen ? new Date(job.firstSeen).toLocaleDateString() : "Recent";
+  
+  // More concise format to fit more jobs per message
+  return `${index}. **${title}** at ${company}${sources}\n   📍 ${location} | 📅 ${date}\n   🔗 ${job.url || "No link"}\n`;
+}
+
+/**
+ * Split jobs into Discord-compatible messages
+ * @param {Array} jobs - Array of job objects
+ * @param {number} maxJobsPerMessage - Maximum jobs per message (default: 15)
+ * @returns {Array} Array of message strings
+ */
+function createDiscordJobMessages(jobs, maxJobsPerMessage = 15) {
+  const messages = [];
+  const sortedJobs = sortJobsByRelevance(jobs);
+  const maxCharsPerMessage = 1900; // Conservative limit for Discord
+
+  let currentMessage = `**🎯 Daily Job Summary**\n`;
+  currentMessage += `Found ${sortedJobs.length} unique jobs across all sources\n\n`;
+  let jobCount = 0;
+  let messageNumber = 1;
+
+  for (let i = 0; i < sortedJobs.length; i++) {
+    const job = sortedJobs[i];
+    const jobText = formatJobForDiscord(job, i + 1);
+    
+    // Check if adding this job would exceed the limit
+    if ((currentMessage + jobText).length > maxCharsPerMessage) {
+      // Add footer to current message
+      currentMessage += `\n*Showing ${jobCount} jobs (${sortedJobs.length} total)*`;
+      messages.push(currentMessage.trim());
+      
+      // Start new message
+      messageNumber++;
+      currentMessage = `**🎯 Daily Job Summary (Continued ${messageNumber})**\n\n`;
+      jobCount = 0;
+    }
+    
+    currentMessage += jobText;
+    jobCount++;
+  }
+  
+  // Add the last message if there's content
+  if (currentMessage.trim().length > 0) {
+    currentMessage += `\n*Showing ${jobCount} jobs (${sortedJobs.length} total)*`;
+    messages.push(currentMessage.trim());
+  }
+
+  return messages;
+}
+
+/**
+ * Create a summary message for daily scraping results
+ * @param {object} results - Scraping results
+ * @param {number} totalUniqueJobs - Total unique jobs found
+ * @returns {Array} Array of summary message strings (split if too long)
+ */
+function createDailySummaryMessage(results, totalUniqueJobs) {
+  const successfulSources = results.successful?.length || 0;
+  const failedSources = results.failed?.length || 0;
+  const skippedSources = results.skipped?.length || 0;
+  const duration = results.duration || 0;
+  const optimizationStats = results.optimizationStats || {};
+
+  let summary = `**📊 Optimized Daily Scraping Summary**\n\n`;
+  summary += `✅ **${successfulSources}** sources scraped successfully\n`;
+  summary += `⏭️ **${skippedSources}** sources skipped (optimization)\n`;
+  summary += `❌ **${failedSources}** sources failed\n`;
+  summary += `🎯 **${totalUniqueJobs}** unique jobs found\n`;
+  summary += `⏱️ Completed in **${duration}** seconds\n\n`;
+
+  // Add optimization statistics if available
+  if (optimizationStats.sourcesSkipped > 0 || optimizationStats.existingJobsReused > 0) {
+    summary += `**⚡ Optimization Results:**\n`;
+    summary += `• ${optimizationStats.sourcesSkipped} sources skipped (recent jobs found)\n`;
+    summary += `• ${optimizationStats.existingJobsReused} existing jobs reused\n`;
+    summary += `• ${optimizationStats.newJobsFound} new jobs discovered\n`;
+    summary += `\n`;
+  }
+
+  if (results.successful?.length > 0) {
+    summary += `**✅ Successfully Scraped:**\n`;
+    results.successful.forEach(source => {
+      const durationText = source.duration ? ` (${source.duration}ms)` : '';
+      summary += `• ${source.name} (${source.priority})${durationText}\n`;
+    });
+    summary += `\n`;
+  }
+
+  if (results.skipped?.length > 0) {
+    summary += `**⏭️ Skipped (Optimization):**\n`;
+    results.skipped.forEach(source => {
+      summary += `• ${source.name} (${source.priority}): ${source.reason}\n`;
+    });
+    summary += `\n`;
+  }
+
+  if (results.failed?.length > 0) {
+    summary += `**❌ Failed Sources:**\n`;
+    results.failed.forEach(source => {
+      summary += `• ${source.name} (${source.priority}): ${source.reason}\n`;
+    });
+  }
+
+  // Split into multiple messages if too long
+  const messages = [];
+  const maxCharsPerMessage = 1900;
+  
+  if (summary.length <= maxCharsPerMessage) {
+    messages.push(summary);
+  } else {
+    // Split the summary into multiple messages
+    const lines = summary.split('\n');
+    let currentMessage = '';
+    
+    for (const line of lines) {
+      if ((currentMessage + line + '\n').length > maxCharsPerMessage) {
+        if (currentMessage.trim()) {
+          messages.push(currentMessage.trim());
+        }
+        currentMessage = line + '\n';
+      } else {
+        currentMessage += line + '\n';
+      }
+    }
+    
+    if (currentMessage.trim()) {
+      messages.push(currentMessage.trim());
+    }
+  }
+
+  return messages;
+}
+
+/**
+ * Create individual source summary messages
+ * @param {string} sourceName - Name of the source
+ * @param {Array} jobs - Array of jobs from this source
+ * @param {object} metadata - Additional metadata (duration, priority, etc.)
+ * @returns {Array} Array of message strings (split if too long)
+ */
+function createSourceSummaryMessages(sourceName, jobs, metadata = {}) {
+  const messages = [];
+  const { duration, priority, skipped, reason, jobsFound, error } = metadata;
+  
+  // Create header message
+  let headerMessage = `**🔍 ${sourceName} Scraping Complete**\n\n`;
+  
+  if (error) {
+    headerMessage += `❌ **Failed**\n`;
+    headerMessage += `💥 **Error:** ${error}\n`;
+    if (duration) {
+      headerMessage += `⏱️ **${duration}ms** processing time\n`;
+    }
+    if (priority) {
+      headerMessage += `🎯 **${priority}** priority source\n`;
+    }
+  } else if (skipped) {
+    headerMessage += `⏭️ **Skipped** (Optimization)\n`;
+    headerMessage += `📋 **${jobs.length}** existing jobs reused\n`;
+    headerMessage += `💡 **Reason:** ${reason}\n`;
+  } else {
+    headerMessage += `✅ **Successfully Scraped**\n`;
+    headerMessage += `📊 **${jobs.length}** relevant jobs found\n`;
+    if (jobsFound !== undefined) {
+      headerMessage += `🆕 **${jobsFound}** new jobs added\n`;
+    }
+    if (duration) {
+      headerMessage += `⏱️ **${duration}ms** processing time\n`;
+    }
+    if (priority) {
+      headerMessage += `🎯 **${priority}** priority source\n`;
+    }
+  }
+  
+  headerMessage += `\n`;
+  
+  // Check if header message is too long (Discord limit is 2000 characters)
+  if (headerMessage.length > 1900) {
+    messages.push(headerMessage.substring(0, 1900) + "...");
+  } else {
+    messages.push(headerMessage);
+  }
+  
+  // If error or no jobs, return early
+  if (error || !jobs || jobs.length === 0) {
+    return messages;
+  }
+  
+  // Create job listing messages with proper Discord character limit handling
+  const sortedJobs = sortJobsByRelevance(jobs);
+  const maxCharsPerMessage = 1900; // Conservative limit for Discord (2000 - buffer)
+  
+  let currentMessage = `**📋 ${sourceName} Jobs**\n\n`;
+  let jobCount = 0;
+  let messageNumber = 1;
+  
+  for (let i = 0; i < sortedJobs.length; i++) {
+    const job = sortedJobs[i];
+    const jobText = formatJobForDiscord(job, i + 1);
+    
+    // Check if adding this job would exceed the limit
+    if ((currentMessage + jobText).length > maxCharsPerMessage) {
+      // Add footer to current message
+      currentMessage += `\n*${sourceName}: ${jobCount} jobs shown*`;
+      messages.push(currentMessage.trim());
+      
+      // Start new message
+      messageNumber++;
+      currentMessage = `**📋 ${sourceName} Jobs (Continued ${messageNumber})**\n\n`;
+      jobCount = 0;
+    }
+    
+    currentMessage += jobText;
+    jobCount++;
+  }
+  
+  // Add the last message if there's content
+  if (currentMessage.trim().length > 0) {
+    currentMessage += `\n*${sourceName}: ${jobCount} jobs shown (${sortedJobs.length} total)*`;
+    messages.push(currentMessage.trim());
+  }
+  
+  return messages;
+}
+
+/**
+ * Send source summary messages to Discord with proper rate limiting
+ * @param {object} channel - Discord channel object
+ * @param {string} sourceName - Name of the source
+ * @param {Array} jobs - Array of jobs from this source
+ * @param {object} metadata - Additional metadata
+ * @param {function} delay - Delay function for rate limiting
+ */
+async function sendSourceSummaryToDiscord(channel, sourceName, jobs, metadata = {}, delay) {
+  if (!channel) return;
+  
+  try {
+    const messages = createSourceSummaryMessages(sourceName, jobs, metadata);
+    
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i];
+      
+      // Validate message length before sending
+      if (message.length > 2000) {
+        loggerService.log(`⚠️ Message ${i + 1} for ${sourceName} exceeds Discord limit (${message.length} chars), truncating...`, "warn");
+        const truncatedMessage = message.substring(0, 1900) + "...\n*[Message truncated due to length]*";
+        await channel.send(truncatedMessage);
+      } else {
+        await channel.send(message);
+      }
+      
+      // Rate limiting between messages
+      if (i < messages.length - 1) {
+        await delay(1500);
+      }
+    }
+    
+    loggerService.log(`✅ Sent ${messages.length} summary messages for ${sourceName}`);
+  } catch (error) {
+    loggerService.log(`❌ Error sending ${sourceName} summary to Discord: ${error.message}`, "error");
+    
+    // Try to send a simplified error message
+    try {
+      const errorMessage = `❌ **${sourceName} Summary Error**\n\nFailed to send detailed summary: ${error.message.substring(0, 100)}...`;
+      await channel.send(errorMessage);
+    } catch (fallbackError) {
+      loggerService.log(`❌ Failed to send error message for ${sourceName}: ${fallbackError.message}`, "error");
+    }
+  }
+}
+
+/**
+ * Check if a job is relevant based on title, company, and description
+ * @param {string} title - Job title
+ * @param {string} company - Company name
+ * @param {string} description - Job description
+ * @param {string} role - Role type filter
+ * @returns {boolean} Whether the job is relevant
+ */
+function isRelevantJob(title, company, description, role = null) {
+  if (!title) {
+    console.log("❌ Job filtered out (no title)");
     return false;
   }
 
-  const titleLower = title.toLowerCase().trim();
-  const companyLower = company.toLowerCase().trim();
-  const descriptionLower = description.toLowerCase().trim();
+  const titleLower = title.toLowerCase();
+  const companyLower = (company || "").toLowerCase();
+  const descriptionLower = (description || "").toLowerCase();
 
-  // Combine all text for comprehensive filtering
-  const fullText = `${titleLower} ${companyLower} ${descriptionLower}`;
+  // Skip jobs with "Company not specified" or "Location not specified"
+  if (companyLower.includes("company not specified") || 
+      companyLower.includes("location not specified") ||
+      companyLower.includes("unknown company")) {
+    console.log(`❌ Job filtered out (invalid company/location): "${title}"`);
+    return false;
+  }
 
-  // Role-specific filtering if role is specified
-  if (role) {
-    const isInternPosition =
-      titleLower.includes("intern") || titleLower.includes("internship");
-    const isNewGradPosition =
-      titleLower.includes("new grad") ||
-      titleLower.includes("entry level") ||
-      titleLower.includes("graduate") ||
-      titleLower.includes("junior") ||
-      titleLower.includes("new graduate");
+  // Exclude non-software/data engineering roles
+  const excludedKeywords = [
+    // Non-software engineering roles
+    "geotechnical", "civil", "mechanical", "electrical", "chemical", "biomedical",
+    "environmental", "aerospace", "nuclear", "petroleum", "mining", "construction",
+    "hvac", "plumbing", "welding", "manufacturing", "production", "assembly",
+    "field service", "field engineer", "field technician", "maintenance", "repair",
+    "quality assurance engineer", "qa engineer", "test engineer", "validation engineer",
+    "process engineer", "project engineer", "design engineer", "sales engineer",
+    "application engineer", "field application", "technical support engineer",
+    "hardware engineer", "firmware engineer", "embedded engineer", "rf engineer",
+    "analog engineer", "digital design engineer", "circuit", "pcb", "asic", "fpga",
+    "water resources", "structural", "transportation", "urban planning", "surveying",
+    "materials engineer", "metallurgical", "ceramic", "polymer", "textile",
+    "food engineer", "agricultural", "forest engineer", "packaging engineer",
+    "safety engineer", "compliance engineer", "regulatory engineer", "clinical engineer",
+    "bioprocess", "pharmaceutical", "medical device", "laboratory", "research engineer",
+    "operations engineer", "facility engineer", "building engineer", "energy engineer",
+    "power engineer", "control engineer", "instrumentation", "automation engineer",
+    "industrial engineer", "logistics engineer", "supply chain engineer",
+    
+    // Non-engineering roles
+    "manager", "director", "lead", "principal", "senior", "staff", "architect",
+    "consultant", "advisor", "specialist", "coordinator", "assistant", "associate",
+    "internship coordinator", "recruiter", "hr", "human resources", "marketing",
+    "sales", "business", "finance", "accounting", "legal", "compliance", "regulatory",
+    "product manager", "project manager", "program manager", "scrum master",
+    "agile coach", "business analyst", "data analyst", "financial analyst",
+    "operations analyst", "market analyst", "research analyst", "policy analyst",
+    
+    // Non-tech roles
+    "customer service", "support", "help desk", "administrative", "clerical",
+    "receptionist", "secretary", "office", "administrator", "coordinator",
+    "teacher", "instructor", "professor", "educator", "tutor", "trainer",
+    "writer", "editor", "content", "journalist", "reporter", "author",
+    "designer", "artist", "creative", "graphic", "visual", "ui/ux",
+    "nurse", "doctor", "physician", "medical", "healthcare", "clinical",
+    "lawyer", "attorney", "legal", "paralegal", "law",
+    "accountant", "bookkeeper", "finance", "banking", "investment",
+    "chef", "cook", "food", "restaurant", "hospitality", "hotel",
+    "driver", "delivery", "logistics", "warehouse", "inventory",
+    "retail", "cashier", "sales associate", "store", "shop"
+  ];
 
-    if (role === "intern" && !isInternPosition) {
-      console.log(
-        `❌ Job filtered out (role mismatch): "${title}" - looking for intern roles only`
-      );
-      return false;
-    }
-
-    if (role === "new grad" && !isNewGradPosition && isInternPosition) {
-      console.log(
-        `❌ Job filtered out (role mismatch): "${title}" - looking for new grad roles only`
-      );
+  // Check for excluded keywords
+  for (const keyword of excludedKeywords) {
+    if (titleLower.includes(keyword) || companyLower.includes(keyword) || descriptionLower.includes(keyword)) {
+      console.log(`❌ Job filtered out (excluded keyword "${keyword}"): "${title}"`);
       return false;
     }
   }
 
-  // Check for specific software/data role indicators (immediate accept)
-  const softwareDataIndicators = config.jobFiltering.softwareDataIndicators;
-  for (const indicator of softwareDataIndicators) {
-    if (titleLower.includes(indicator.toLowerCase())) {
-      console.log(
-        `✅ Job accepted (software/data indicator): "${title}" contains "${indicator}"`
-      );
-      return true;
-    }
-  }
+  // Required software/data engineering keywords (at least one must be present)
+  const requiredKeywords = [
+    // Core software engineering
+    "software engineer", "software developer", "software development",
+    "frontend", "backend", "fullstack", "full-stack", "full stack",
+    "web developer", "web development", "mobile developer", "app developer",
+    "application developer", "systems engineer", "platform engineer",
+    
+    // Data engineering/science
+    "data engineer", "data scientist", "data analyst", "data analytics",
+    "machine learning", "ml engineer", "ai engineer", "artificial intelligence",
+    "analytics engineer", "business intelligence", "bi engineer",
+    
+    // DevOps/Infrastructure
+    "devops", "site reliability", "sre", "infrastructure engineer",
+    "cloud engineer", "platform engineer", "systems administrator",
+    
+    // Specific technologies
+    "react", "node", "python", "java", "javascript", "typescript", 
+    "c++", "c#", "golang", "rust", "kotlin", "swift", "php", "ruby", "scala",
+    "database", "sql", "nosql", "mongodb", "postgresql", "mysql",
+    "api", "microservices", "kubernetes", "docker", "aws", "azure", "gcp",
+    
+    // Cybersecurity
+    "cybersecurity", "security engineer", "information security",
+    
+    // Emerging tech
+    "blockchain", "crypto", "fintech", "quantitative", "algorithm",
+    
+    // Intern/Entry level indicators
+    "intern", "internship", "co-op", "coop", "student", "new grad", 
+    "new graduate", "entry level", "entry-level", "junior", "recent graduate"
+  ];
 
-  // Check for excluded keywords (immediate reject)
-  const excludedKeywords = config.jobFiltering.excludedKeywords;
-  for (const excluded of excludedKeywords) {
-    if (fullText.includes(excluded.toLowerCase())) {
-      console.log(
-        `❌ Job filtered out (excluded keyword): "${title}" contains "${excluded}"`
-      );
-      return false;
-    }
-  }
-
-  // Check if title contains at least one required keyword
-  const requiredKeywords = config.jobFiltering.requiredKeywords;
-  const hasRequiredKeyword = requiredKeywords.some((keyword) =>
-    titleLower.includes(keyword.toLowerCase())
+  // Check if any required keyword is present
+  const hasRequiredKeyword = requiredKeywords.some(keyword => 
+    titleLower.includes(keyword) || companyLower.includes(keyword) || descriptionLower.includes(keyword)
   );
 
   if (!hasRequiredKeyword) {
@@ -88,107 +495,189 @@ function isRelevantJob(title, company = "", description = "", role = null) {
     return false;
   }
 
-  // Additional specific filtering for common false positives
-  const falsePositives = [
-    "geotechnical engineer",
-    "civil engineer",
-    "mechanical engineer",
-    "electrical engineer",
-    "chemical engineer",
-    "environmental engineer",
-    "field engineer",
-    "field service engineer",
-    "field application engineer",
-    "hardware engineer",
-    "firmware engineer",
-    "rf engineer",
-    "analog engineer",
-    "digital design engineer",
-    "circuit protection",
-    "water resources",
-    "structural engineer",
-    "transportation engineer",
-    "construction engineer",
-    "manufacturing engineer",
-    "production engineer",
-    "quality engineer",
-    "process engineer",
-    "project engineer",
-    "sales engineer",
-    "application engineer",
-    "technical support engineer",
-    "validation engineer",
-    "test engineer",
-    "maintenance engineer",
-    "facility engineer",
-    "building engineer",
-    "operations engineer",
-    "safety engineer",
-    "compliance engineer",
-    "regulatory engineer",
-    "clinical engineer",
-    "biomedical engineer",
-    "materials engineer",
-    "packaging engineer",
-    "energy engineer",
-    "power engineer",
-    "control engineer",
-    "instrumentation engineer",
-    "automation engineer",
-    "industrial engineer",
-    "logistics engineer",
-    "supply chain engineer",
-  ];
-
-  for (const falsePositive of falsePositives) {
-    if (titleLower.includes(falsePositive)) {
-      console.log(
-        `❌ Job filtered out (false positive): "${title}" matches "${falsePositive}"`
-      );
+  // Role-specific filtering
+  if (role === "intern") {
+    const internKeywords = ["intern", "internship", "co-op", "coop", "student"];
+    const hasInternKeyword = internKeywords.some(keyword => titleLower.includes(keyword));
+    if (!hasInternKeyword) {
+      console.log(`❌ Job filtered out (not an intern position): "${title}"`);
+      return false;
+    }
+  } else if (role === "new grad") {
+    const newGradKeywords = ["new grad", "new graduate", "entry level", "entry-level", "junior", "recent graduate"];
+    const hasNewGradKeyword = newGradKeywords.some(keyword => titleLower.includes(keyword));
+    if (!hasNewGradKeyword) {
+      console.log(`❌ Job filtered out (not a new grad position): "${title}"`);
       return false;
     }
   }
 
-  // If we get here, the job has required keywords and no excluded keywords
-  console.log(`✅ Job accepted (passed filtering): "${title}"`);
+  console.log(`✅ Job accepted: "${title}"`);
   return true;
 }
 
 /**
- * Filter an array of jobs to only include relevant software/data engineering positions
- * @param {Array} jobs - Array of job objects with title, company, description properties
- * @param {string} role - Role type: 'intern' or 'new grad' (optional, for role-specific filtering)
- * @returns {Array} Filtered array of relevant jobs
+ * Filter jobs based on relevance criteria
+ * @param {Array} jobs - Array of job objects
+ * @param {string} role - Role type filter
+ * @returns {Array} Filtered jobs
  */
 function filterRelevantJobs(jobs, role = null) {
   if (!Array.isArray(jobs)) {
+    console.log("❌ Invalid jobs array provided to filterRelevantJobs");
     return [];
   }
 
-  const filteredJobs = jobs.filter((job) => {
-    if (!job || !job.title) {
-      return false;
-    }
-
+  console.log(`🔍 Filtering ${jobs.length} jobs for role: ${role || "any"}`);
+  
+  const filteredJobs = jobs.filter(job => {
     return isRelevantJob(
       job.title,
-      job.company || "",
-      job.description || "",
+      job.company,
+      job.description,
       role
     );
   });
 
-  const roleText = role ? ` (${role} roles)` : "";
-  console.log(
-    `🔍 Job filtering${roleText}: ${jobs.length} total → ${
-      filteredJobs.length
-    } relevant (${jobs.length - filteredJobs.length} filtered out)`
-  );
+  console.log(`✅ Filtered to ${filteredJobs.length} relevant jobs`);
   return filteredJobs;
 }
 
+/**
+ * Filter jobs to only include those posted in the last day
+ * @param {Array} jobs - Array of job objects
+ * @param {string} timeFilter - Time filter ("day", "week", "month")
+ * @returns {Array} Filtered jobs from the specified time period
+ */
+function filterJobsByDate(jobs, timeFilter = "day") {
+  if (!Array.isArray(jobs)) {
+    console.log("❌ Invalid jobs array provided to filterJobsByDate");
+    return [];
+  }
+
+  const now = new Date();
+  let cutoffDate;
+
+  switch (timeFilter) {
+    case "day":
+      cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24 hours ago
+      break;
+    case "week":
+      cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
+      break;
+    case "month":
+      cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
+      break;
+    default:
+      cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Default to 24 hours
+  }
+
+  console.log(`🔍 Filtering ${jobs.length} jobs for posts since ${cutoffDate.toLocaleString()}`);
+  
+  const filteredJobs = jobs.filter(job => {
+    // Try to parse the posted date
+    let jobDate;
+    
+    if (job.postedDate) {
+      // Handle various date formats
+      if (typeof job.postedDate === 'string') {
+        // Try to parse common date formats
+        const dateStr = job.postedDate.toLowerCase().trim();
+        
+        // Skip empty or invalid date strings
+        if (!dateStr || dateStr === '' || dateStr === 'n/a' || dateStr === 'unknown') {
+          console.log(`⚠️ Empty or invalid date for job: "${job.title}" - including it`);
+          return true;
+        }
+        
+        // Handle GitHub age format (0d, 1d, 2d, 9d, etc.)
+        if (dateStr.match(/^\d+d$/)) {
+          const timeMatch = dateStr.match(/^(\d+)d$/);
+          if (timeMatch) {
+            const amount = parseInt(timeMatch[1]);
+            jobDate = new Date(now.getTime() - amount * 24 * 60 * 60 * 1000);
+          }
+        }
+        // Handle GitHub age format with "mo" (1mo, 2mo, 3mo, etc.)
+        else if (dateStr.match(/^\d+mo$/)) {
+          const timeMatch = dateStr.match(/^(\d+)mo$/);
+          if (timeMatch) {
+            const amount = parseInt(timeMatch[1]);
+            jobDate = new Date(now.getTime() - amount * 30 * 24 * 60 * 60 * 1000);
+          }
+        }
+        // Handle relative dates like "2 hours ago", "1 day ago", etc.
+        else if (dateStr.includes('ago')) {
+          const timeMatch = dateStr.match(/(\d+)\s*(hour|day|week|month)s?\s*ago/i);
+          if (timeMatch) {
+            const amount = parseInt(timeMatch[1]);
+            const unit = timeMatch[2].toLowerCase();
+            
+            switch (unit) {
+              case 'hour':
+                jobDate = new Date(now.getTime() - amount * 60 * 60 * 1000);
+                break;
+              case 'day':
+                jobDate = new Date(now.getTime() - amount * 24 * 60 * 60 * 1000);
+                break;
+              case 'week':
+                jobDate = new Date(now.getTime() - amount * 7 * 24 * 60 * 60 * 1000);
+                break;
+              case 'month':
+                jobDate = new Date(now.getTime() - amount * 30 * 24 * 60 * 60 * 1000);
+                break;
+            }
+          }
+        } else {
+          // Try to parse as a regular date
+          jobDate = new Date(job.postedDate);
+        }
+      } else if (job.postedDate instanceof Date) {
+        jobDate = job.postedDate;
+      }
+    }
+    
+    // If we couldn't parse the date, include the job (don't filter out)
+    if (!jobDate || isNaN(jobDate.getTime())) {
+      console.log(`⚠️ Could not parse date for job: "${job.title}" - including it`);
+      return true;
+    }
+    
+    // Check if job was posted after the cutoff date
+    const isRecent = jobDate >= cutoffDate;
+    
+    if (!isRecent) {
+      console.log(`❌ Job filtered out (too old): "${job.title}" - posted ${jobDate.toLocaleDateString()}`);
+    }
+    
+    return isRecent;
+  });
+
+  console.log(`✅ Filtered to ${filteredJobs.length} recent jobs (posted in last ${timeFilter})`);
+  return filteredJobs;
+}
+
+/**
+ * Delay function for rate limiting
+ * @param {number} ms - Milliseconds to delay
+ * @returns {Promise} Promise that resolves after delay
+ */
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 module.exports = {
-  delay,
+  generateJobId,
+  normalizeJob,
+  deduplicateJobs,
+  sortJobsByRelevance,
+  formatJobForDiscord,
+  createDiscordJobMessages,
+  createDailySummaryMessage,
+  createSourceSummaryMessages,
+  sendSourceSummaryToDiscord,
   isRelevantJob,
   filterRelevantJobs,
+  filterJobsByDate,
+  delay
 };

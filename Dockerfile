@@ -12,10 +12,10 @@ COPY . .
 # ---------- runtime stage ----------
 FROM node:22-slim
 
-
 # Install Chromium and required libraries for headless mode
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    chromium \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libx11-xcb1 libxcomposite1 \
     libxdamage1 libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 \
     libpango-1.0-0 libcairo2 fonts-liberation && \
@@ -29,12 +29,26 @@ COPY --from=build /app .
 RUN useradd -m pptr && chown -R pptr:pptr /app
 USER pptr
 
-# Skip Puppeteer's Chromium download and point to system-installed Chromium
-# ENV NODE_ENV=production \
-#     PUPPETEER_SKIP_DOWNLOAD=true \
-#     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV NODE_ENV=production
-RUN node -e "require('puppeteer')"
+# Configure Puppeteer to use system-installed Chromium
+ENV NODE_ENV=production \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Start the bot
-CMD ["node", "server.js"]
+# Create startup script
+RUN echo '#!/bin/bash\n\
+if [ "$MODE" = "daily" ]; then\n\
+    echo "Starting daily scraper..."\n\
+    node daily-scraper.js\n\
+elif [ "$MODE" = "daily-now" ]; then\n\
+    echo "Running daily scraper immediately..."\n\
+    node daily-scraper.js --run-now\n\
+elif [ "$MODE" = "scrape" ]; then\n\
+    echo "Running comprehensive scrape..."\n\
+    node scrape.js\n\
+else\n\
+    echo "Starting main server..."\n\
+    node server.js\n\
+fi' > /app/start.sh && chmod +x /app/start.sh
+
+# Start the application based on MODE environment variable
+CMD ["/app/start.sh"]

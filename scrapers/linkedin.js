@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay, filterRelevantJobs } = require("../utils/helpers");
+const { delay, filterRelevantJobs, filterJobsByDate } = require("../utils/helpers");
 
 /**
  * Extract clean text from element, removing unwanted characters
@@ -327,76 +327,46 @@ async function scrapeLinkedInWithRetry(searchUrl, maxJobs, retries = 3) {
 
 /**
  * Main function to scrape LinkedIn jobs
- * @param {string} timeFilter - Time filter (e.g., 'r86400', 'r604800', 'r2592000')
- * @param {object} client - Discord client
- * @param {string} mode - 'discord' or 'comprehensive' mode
- * @returns {object} Scraping status with job count
+ * @param {string} timeFilter - Time filter for search
+ * @param {object} client - Discord client (optional, if null won't post to Discord)
+ * @param {string} mode - Scraping mode: "discord" or "comprehensive"
+ * @param {string} role - Role type: "intern" or "new grad"
+ * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(
-  timeFilter = null,
-  client,
-  mode = "comprehensive",
-  role = "intern"
-) {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
     errorCount: 0,
     jobsFound: 0,
+    jobs: [] // Add jobs array to return
   };
 
-  logger.log(`Starting LinkedIn job scraping process (${mode} mode)`);
+  logger.log("Starting LinkedIn job scraping process");
 
   try {
-    const channel = client.channels.cache.get(config.channelId);
-    if (!channel) {
-      logger.log(`Channel with ID ${config.channelId} not found`, "error");
-      return lastRunStatus;
+    const channel = client?.channels?.cache?.get(config.channelId);
+    
+    if (channel && mode === "discord") {
+      await channel.send("LinkedIn Job Postings Update");
     }
 
-    // Use default time filter for comprehensive mode if none provided
-    if (!timeFilter && mode === "comprehensive") {
-      timeFilter =
-        config.linkedin.timeFilters[config.linkedin.defaultComprehensiveFilter];
-    }
-
-    const modeText =
-      mode === "discord" ? " (Discord Command)" : " (Comprehensive)";
-    await channel.send(`LinkedIn Job Postings Update${modeText}`);
-
-    // Use all keywords from config (role filtering applied in job processing)
-    const allKeywords = config.linkedin.jobKeywords;
-    logger.log(
-      `Using ${allKeywords.length} keywords for LinkedIn search (filtering for ${role} roles)`
-    );
-
-    for (const keyword of allKeywords) {
+    // Process each keyword and location combination
+    for (const keyword of config.linkedin.jobKeywords) {
       for (const location of config.linkedin.jobLocations) {
         try {
-          // Build search URL with proper parameters matching user's LinkedIn URLs
-          const params = new URLSearchParams({
+          // Build search URL with parameters
+          const searchParams = new URLSearchParams({
             keywords: keyword,
             location: location,
+            f_TPR: timeFilter,
+            ...config.linkedin.standardParams,
           });
 
-          // Add standard LinkedIn parameters from config
-          const standardParams = config.linkedin.standardParams;
-          for (const [key, value] of Object.entries(standardParams)) {
-            params.append(key, value);
-          }
+          const searchUrl = `https://www.linkedin.com/jobs/search?${searchParams.toString()}`;
+          logger.log(`Scraping LinkedIn for "${keyword}" in "${location}"`);
 
-          // Add time filter if provided
-          if (timeFilter) {
-            params.append("f_TPR", timeFilter);
-          }
-
-          const searchUrl = `https://www.linkedin.com/jobs/search/?${params.toString()}`;
-          logger.log(
-            `Scraping LinkedIn for "${keyword}" in "${location}" (${mode} mode)`
-          );
-          logger.log(`Search URL: ${searchUrl}`);
-
-          // Determine job limit based on mode and time filter
+          // Determine job limit based on mode
           let jobLimit;
           if (mode === "discord") {
             // Get Discord-specific limit based on time filter
@@ -438,19 +408,30 @@ async function scrapeAllJobs(
             continue;
           }
 
+          // Apply date filtering for daily scraping (only jobs from last day)
+          const recentJobs = filterJobsByDate(relevantJobs, "day");
+          logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last day for "${keyword}" in "${location}"`);
+          
+          if (recentJobs.length === 0) {
+            logger.log(
+              `No recent jobs found for "${keyword}" in "${location}"`
+            );
+            continue;
+          }
+
           // Filter out jobs that already exist in the cache
-          const newJobs = relevantJobs.filter(
+          const newJobs = recentJobs.filter(
             (job) => !mongoService.jobExists(job.id, "linkedin")
           );
 
           // Log job data quality
-          const validJobs = relevantJobs.filter(
+          const validJobs = recentJobs.filter(
             (job) =>
               job.title &&
               !job.title.includes("*") &&
               job.title !== "Position details unavailable"
           );
-          const invalidJobs = relevantJobs.length - validJobs.length;
+          const invalidJobs = recentJobs.length - validJobs.length;
 
           if (invalidJobs > 0) {
             logger.log(
@@ -460,7 +441,7 @@ async function scrapeAllJobs(
           }
 
           logger.log(
-            `Found ${jobs.length} total jobs, ${relevantJobs.length} relevant jobs, ${newJobs.length} new jobs for "${keyword}" in "${location}" (${mode} mode)`
+            `Found ${jobs.length} total jobs, ${relevantJobs.length} relevant jobs, ${recentJobs.length} recent jobs, ${newJobs.length} new jobs for "${keyword}" in "${location}" (${mode} mode)`
           );
 
           // Add new jobs to the cache
@@ -468,9 +449,12 @@ async function scrapeAllJobs(
             await mongoService.addJobs(newJobs, "linkedin");
           }
 
+          // Add all recent jobs to the return array (not just new ones)
+          lastRunStatus.jobs.push(...recentJobs);
           lastRunStatus.jobsFound += newJobs.length;
 
-          if (newJobs.length > 0) {
+          // Only post to Discord if client is provided and mode is discord
+          if (channel && mode === "discord" && newJobs.length > 0) {
             const timeFilterText = timeFilter
               ? ` (${
                   Object.keys(config.linkedin.timeFilters).find(
@@ -483,8 +467,7 @@ async function scrapeAllJobs(
             );
 
             // Limit Discord output to prevent spam
-            const jobsToShow =
-              mode === "discord" ? newJobs.slice(0, jobLimit) : newJobs;
+            const jobsToShow = newJobs.slice(0, jobLimit);
 
             for (const job of jobsToShow) {
               if (!job.title || !job.url) continue;
@@ -505,17 +488,14 @@ async function scrapeAllJobs(
             }
 
             // If there are more jobs in comprehensive mode, mention it
-            if (
-              mode === "comprehensive" &&
-              newJobs.length > jobsToShow.length
-            ) {
+            if (newJobs.length > jobsToShow.length) {
               await channel.send(
                 `... and ${
                   newJobs.length - jobsToShow.length
                 } more jobs added to database`
               );
             }
-          } else {
+          } else if (newJobs.length === 0) {
             logger.log(`No new jobs for "${keyword}" in "${location}"`);
           }
         } catch (error) {
@@ -524,18 +504,20 @@ async function scrapeAllJobs(
             `Error scraping for "${keyword}" in "${location}": ${error.message}`,
             "error"
           );
-          try {
-            await channel.send(
-              `Error scraping LinkedIn for ${keyword} in ${location} - ${error.message.substring(
-                0,
-                100
-              )}`
-            );
-          } catch (msgError) {
-            logger.log(
-              `Failed to send error message: ${msgError.message}`,
-              "error"
-            );
+          if (channel && mode === "discord") {
+            try {
+              await channel.send(
+                `Error scraping LinkedIn for ${keyword} in ${location} - ${error.message.substring(
+                  0,
+                  100
+                )}`
+              );
+            } catch (msgError) {
+              logger.log(
+                `Failed to send error message: ${msgError.message}`,
+                "error"
+              );
+            }
           }
         }
         // Delay between searches to reduce detection risk
@@ -543,12 +525,15 @@ async function scrapeAllJobs(
       }
     }
 
-    await channel.send(
-      `LinkedIn job scraping complete (${mode} mode). Found ${lastRunStatus.jobsFound} new jobs.`
-    );
+    if (channel && mode === "discord") {
+      await channel.send(
+        `LinkedIn job scraping complete (${mode} mode). Found ${lastRunStatus.jobsFound} new jobs.`
+      );
+    }
+    
     lastRunStatus.success = true;
     logger.log(
-      `LinkedIn job scraping completed successfully (${mode} mode). Found ${lastRunStatus.jobsFound} new jobs.`
+      `LinkedIn job scraping completed successfully (${mode} mode). Found ${lastRunStatus.jobsFound} new jobs, collected ${lastRunStatus.jobs.length} total relevant jobs.`
     );
 
     return lastRunStatus;

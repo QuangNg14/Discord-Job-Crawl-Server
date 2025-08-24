@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay, filterRelevantJobs } = require("../utils/helpers");
+const { delay, filterRelevantJobs, filterJobsByDate } = require("../utils/helpers");
 
 /**
  * Scrape Jobright.ai search results
@@ -18,7 +18,7 @@ async function scrapeJobRight(searchUrl) {
 
   try {
     browser = await puppeteer.launch({
-      headless: "new", // modern headless
+      headless: "new",
       args: ["--no-sandbox"],
     });
 
@@ -30,120 +30,124 @@ async function scrapeJobRight(searchUrl) {
         "Chrome/91.0.4472.124 Safari/537.36"
     );
 
-    // Load the search page and wait until the DOM is loaded
     await page.goto(searchUrl, {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
-    await delay(5000); // Additional wait time for dynamic content
+    await delay(3000);
 
-    // Wait for the job title elements to appear
-    await page.waitForSelector("h2.index_job-title__UjuEY", { timeout: 10000 });
+    // Wait for job content to load
+    await page.waitForSelector("body", { timeout: 15000 });
 
     if (config.debugMode) {
-      const fullHTML = await page.content();
-      logger.log(`Full HTML snapshot length: ${fullHTML.length}`);
       await page.screenshot({
         path: `jr-debug-${Date.now()}.png`,
         fullPage: true,
       });
     }
 
-    // Extract visible details from each job card
+    // Extract job data with improved parsing
     const jobs = await page.evaluate(() => {
-      const anchors = Array.from(document.querySelectorAll("a")).filter((a) =>
-        a.querySelector("h2.index_job-title__UjuEY")
-      );
+      const results = [];
+      const processedJobs = new Set();
 
-      return anchors.map((anchor) => {
-        // Get the job title
-        const titleEl = anchor.querySelector("h2.index_job-title__UjuEY");
-        const title = titleEl ? titleEl.innerText.trim() : "";
+      // Look for job cards or job-related elements
+      const jobElements = document.querySelectorAll('a[href*="/jobs/"], [class*="job"], [class*="card"], article, div[role="article"]');
+      
+      jobElements.forEach((element) => {
+        try {
+          const textContent = element.textContent || element.innerText || "";
+          const cleanText = textContent.trim().replace(/\s+/g, ' ');
+          
+          if (cleanText.length < 20) return;
 
-        // Extract company info with multiple selector attempts
-        let company = "";
-        const companySelectors = [
-          ".index_company__3tRyK",
-          ".company-name",
-          ".index_company-name__abc123",
-          "span[class*='company']",
-          "div[class*='company']",
-          ".index_middle__Q7fZq span:first-child",
-          ".index_middle__Q7fZq div:first-child",
-        ];
+          // Extract job information using regex patterns
+          let title = "";
+          let company = "";
+          let location = "";
+          let url = "";
 
-        for (const selector of companySelectors) {
-          const companyElement = anchor.querySelector(selector);
-          if (companyElement) {
-            const companyText =
-              companyElement.innerText || companyElement.textContent;
-            if (
-              companyText &&
-              companyText.trim() &&
-              !companyText.includes("•") &&
-              companyText.length > 1
-            ) {
-              company = companyText.trim();
-              break;
+          // Get URL if available
+          if (element.href) {
+            url = element.href;
+          } else if (element.querySelector('a')) {
+            url = element.querySelector('a').href;
+          }
+
+          // Parse text content for job details
+          const lines = cleanText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+          
+          for (const line of lines) {
+            const lowerLine = line.toLowerCase();
+            
+            // Skip UI/navigation text
+            if (lowerLine.includes('home') || lowerLine.includes('about') || 
+                lowerLine.includes('contact') || lowerLine.includes('privacy') ||
+                lowerLine.includes('terms') || lowerLine.includes('login') ||
+                lowerLine.includes('sign up') || lowerLine.includes('search') ||
+                lowerLine.includes('apply now') || lowerLine.includes('match score')) {
+              continue;
+            }
+
+            // Extract job title (look for engineering/tech keywords)
+            if (!title && (lowerLine.includes('engineer') || lowerLine.includes('developer') || 
+                lowerLine.includes('scientist') || lowerLine.includes('analyst') ||
+                lowerLine.includes('intern') || lowerLine.includes('full stack') ||
+                lowerLine.includes('software') || lowerLine.includes('data'))) {
+              title = line;
+            }
+            
+            // Extract company name (look for company indicators)
+            if (!company && (lowerLine.includes('inc') || lowerLine.includes('llc') || 
+                lowerLine.includes('corp') || lowerLine.includes('ltd') ||
+                lowerLine.includes('company') || lowerLine.includes('tech') ||
+                lowerLine.includes('systems') || lowerLine.includes('solutions') ||
+                lowerLine.includes('group') || lowerLine.includes('partners'))) {
+              company = line;
+            }
+            
+            // Extract location (look for city, state patterns)
+            if (!location && (lowerLine.includes(',') && 
+                (lowerLine.includes('ca') || lowerLine.includes('ny') || 
+                 lowerLine.includes('tx') || lowerLine.includes('fl') || 
+                 lowerLine.includes('wa') || lowerLine.includes('ma') ||
+                 lowerLine.includes('remote') || lowerLine.includes('us')))) {
+              location = line;
             }
           }
-        }
 
-        // If no company found in specific selectors, try to parse from metadata
-        if (!company) {
-          const metaEl = anchor.querySelector("div.index_middle__Q7fZq");
-          if (metaEl) {
-            const metaText = metaEl.innerText.trim();
-            // Try to extract company name from metadata (usually first part before location/salary)
-            const parts = metaText.split("•").map((part) => part.trim());
-            if (
-              parts.length > 0 &&
-              parts[0].length > 1 &&
-              !parts[0].includes("$") &&
-              !parts[0].includes("Remote")
-            ) {
-              company = parts[0];
+          // Create job object if we have a title
+          if (title && !processedJobs.has(title.toLowerCase())) {
+            processedJobs.add(title.toLowerCase());
+            
+            // Generate fallback URL if none found
+            if (!url) {
+              url = `https://jobright.ai/jobs/search?q=${encodeURIComponent(title)}`;
             }
+
+            // Generate unique ID
+            const jobId = `jobright-${btoa(title + "_" + company).slice(0, 20)}`;
+
+            results.push({
+              id: jobId,
+              title: title,
+              url: url,
+              company: company || "Company not specified",
+              location: location || "Location not specified",
+              postedDate: "Recent",
+              description: cleanText.substring(0, 200) + "...",
+              metadata: cleanText,
+              salary: "",
+              workModel: "",
+              source: "jobright",
+            });
           }
+        } catch (error) {
+          console.log(`Error processing job element: ${error.message}`);
         }
-
-        // Apply fallback only if still no company found
-        if (!company || company === "") {
-          company = "Company name not available";
-        }
-
-        // Debug logging for company extraction
-        console.log(
-          `Jobright extracted - Title: "${title}", Company: "${company}"`
-        );
-        if (metadata) {
-          console.log(`  Metadata: "${metadata}"`);
-        }
-
-        // Get the metadata section (for additional details such as location, salary, etc.)
-        let metadata = "";
-        const metaEl = anchor.querySelector("div.index_middle__Q7fZq");
-        if (metaEl) {
-          metadata = metaEl.innerText.trim();
-        }
-
-        // Build the composite key from title and company (lower-case)
-        const compositeKey = (title + "_" + company).toLowerCase();
-
-        return {
-          id: `jobright-${compositeKey.replace(/\s+/g, "-").substring(0, 30)}`,
-          title,
-          url: anchor.href || "",
-          company,
-          location: "USA", // Default as per configuration
-          postedDate: "Recent",
-          description: "",
-          metadata,
-          salary: "",
-          workModel: "",
-          source: "jobright",
-        };
       });
+
+      return results;
     });
 
     logger.log(`Jobright.ai scraper found ${jobs.length} jobs.`);
@@ -158,149 +162,67 @@ async function scrapeJobRight(searchUrl) {
 
 /**
  * Main function to scrape Jobright.ai jobs
- * @param {object} client - Discord client
- * @returns {object} Status object
+ * @param {object} client - Discord client (optional, if null won't post to Discord)
+ * @param {string} mode - Scraping mode: "discord" or "comprehensive"
+ * @param {string} role - Role type: "intern" or "new grad"
+ * @returns {object} Object with jobs array and metadata
  */
 async function scrapeAllJobs(client, mode = "discord", role = "intern") {
-  const lastRunStatus = {
-    lastRun: new Date(),
-    success: false,
-    errorCount: 0,
-    jobsFound: 0,
-  };
+  logger.log("Starting Jobright.ai scraping process");
+  
+  const allJobs = [];
+  const searches = config.jobright.searches;
+  const jobLimit = mode === "comprehensive" ? config.jobright.jobLimits.comprehensive : config.jobright.jobLimits.discord;
 
-  logger.log("Starting Jobright.ai job scraping process");
-
-  try {
-    const channel = client.channels.cache.get(config.channelId);
-    if (!channel) {
-      logger.log(`Channel with ID ${config.channelId} not found`, "error");
-      return lastRunStatus;
-    }
-
-    await channel.send("Jobright.ai - Software Engineering Jobs Update");
-
-    // Process each search configuration
-    // Use all searches from config (role filtering applied in job processing)
-    const allSearches = config.jobright.searches;
-    logger.log(
-      `Using ${allSearches.length} searches for JobRight (filtering for ${role} roles)`
-    );
-
-    for (const searchConfig of allSearches) {
-      try {
-        const searchUrl = `${
-          config.jobright.baseUrl
-        }?jobTitle=${encodeURIComponent(searchConfig.jobTitle)}&${
-          config.jobright.additionalParams
-        }`;
-        logger.log(`Searching for: ${searchConfig.name}`);
-
-        const jobs = await scrapeJobRight(searchUrl);
-        if (!jobs || jobs.length === 0) {
-          logger.log(`No jobs found for ${searchConfig.name}`);
-          await channel.send(`No jobs found for ${searchConfig.name}.`);
-          continue;
-        }
-
-        // Filter for relevant software/data engineering jobs only
+  for (const search of searches) {
+    try {
+      logger.log(`Scraping Jobright.ai for: ${search.name}`);
+      
+      // Construct search URL
+      const searchUrl = `${config.jobright.baseUrl}?q=${encodeURIComponent(search.jobTitle)}&${config.jobright.additionalParams}`;
+      
+      const jobs = await scrapeJobRight(searchUrl);
+      
+      if (jobs && jobs.length > 0) {
+        // Filter for relevant jobs
         const relevantJobs = filterRelevantJobs(jobs, role);
-        if (relevantJobs.length === 0) {
-          logger.log(
-            `No relevant software/data jobs found for ${searchConfig.name}`
-          );
-          await channel.send(
-            `No relevant software/data jobs found for ${searchConfig.name}.`
-          );
-          continue;
-        }
-
-        // Filter out jobs already in the cache
-        const newJobs = relevantJobs.filter(
-          (job) => !mongoService.jobExists(job.id, "jobright")
-        );
-        if (newJobs.length === 0) {
-          logger.log(`No new relevant jobs for ${searchConfig.name}`);
-          await channel.send(`No new relevant jobs for ${searchConfig.name}.`);
-          continue;
-        }
-
-        // Select jobs based on mode (discord = lightweight, comprehensive = thorough)
-        const jobLimit =
-          mode === "comprehensive"
-            ? config.jobright.jobLimits.comprehensive
-            : config.jobright.jobLimits.discord;
-        const postsToSend = newJobs.slice(0, jobLimit);
-
-        // Add jobs to MongoDB cache
-        await mongoService.addJobs(postsToSend, "jobright");
-        lastRunStatus.jobsFound += postsToSend.length;
-
-        await channel.send(
-          `${searchConfig.name} (${postsToSend.length} new posting${
-            postsToSend.length > 1 ? "s" : ""
-          }):`
-        );
-
-        // Post each job
-        for (const job of postsToSend) {
-          if (!job.title || !job.url) continue;
-
-          const embed = new EmbedBuilder()
-            .setTitle(job.title)
-            .setURL(job.url)
-            .setColor(config.jobright.embedColor)
-            .setDescription(job.company)
-            .addFields({
-              name: "Details",
-              value: job.metadata || "N/A",
-              inline: false,
-            })
-            .setFooter({
-              text: `Source: Jobright.ai | ID: ${job.id.substring(0, 10)}`,
-            });
-
-          try {
-            await channel.send({ embeds: [embed] });
-          } catch (err) {
-            logger.log(`Error sending job posting: ${err.message}`, "error");
-          }
-
-          await delay(1000);
-        }
-      } catch (error) {
-        lastRunStatus.errorCount++;
-        logger.log(
-          `Error processing search "${searchConfig.name}": ${error.message}`,
-          "error"
-        );
-        await channel.send(
-          `Error processing search for ${
-            searchConfig.name
-          }: ${error.message.substring(0, 100)}`
-        );
+        logger.log(`Found ${relevantJobs.length} relevant jobs for ${search.name}`);
+        
+        // Apply date filtering for daily scraping (only jobs from last day)
+        const recentJobs = filterJobsByDate(relevantJobs, "day");
+        logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last day for ${search.name}`);
+        
+        // Limit jobs per search
+        const limitedJobs = recentJobs.slice(0, Math.ceil(jobLimit / searches.length));
+        allJobs.push(...limitedJobs);
       }
-
-      await delay(3000); // Delay between searches
+      
+      await delay(2000); // Delay between searches
+    } catch (error) {
+      logger.log(`Error scraping ${search.name}: ${error.message}`, "error");
     }
-
-    await channel.send(
-      `Jobright.ai scraping complete. Found ${lastRunStatus.jobsFound} new jobs.`
-    );
-    lastRunStatus.success = true;
-    logger.log("Jobright.ai job scraping process completed successfully.");
-
-    return lastRunStatus;
-  } catch (error) {
-    lastRunStatus.success = false;
-    logger.log(
-      `Critical error in Jobright.ai scrapeAllJobs: ${error.message}`,
-      "error"
-    );
-    return lastRunStatus;
   }
+
+  // Remove duplicates and limit total jobs
+  const uniqueJobs = allJobs.filter((job, index, self) => 
+    index === self.findIndex(j => j.id === job.id)
+  ).slice(0, jobLimit);
+
+  logger.log(`Jobright.ai scraping complete. Found ${uniqueJobs.length} unique jobs.`);
+
+  // Save to cache
+  if (uniqueJobs.length > 0) {
+    await mongoService.addJobsToCache("jobright", uniqueJobs);
+  }
+
+  return {
+    jobs: uniqueJobs,
+    jobsFound: uniqueJobs.length,
+    source: "jobright"
+  };
 }
 
 module.exports = {
   scrapeAllJobs,
+  scrapeJobRight
 };
