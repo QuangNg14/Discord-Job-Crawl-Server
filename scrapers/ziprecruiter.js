@@ -59,8 +59,8 @@ async function scrapeZipRecruiter(searchUrl) {
       const results = [];
       const processedJobs = new Set();
 
-      // Look for job listings with multiple strategies
-      const jobElements = document.querySelectorAll('a[href*="/k/l/"], [class*="job"], [class*="result"], article, div[role="article"]');
+      // Look for job listings with multiple strategies - updated for new ZipRecruiter format
+      const jobElements = document.querySelectorAll('a[href*="/k/l/"], [class*="job"], [class*="result"], article, div[role="article"], .job_result, .job-listing, [data-testid*="job"], .search-result');
       
       jobElements.forEach((element) => {
         try {
@@ -76,9 +76,11 @@ async function scrapeZipRecruiter(searchUrl) {
           let url = "";
           let postedDate = "Recent";
 
-          // Get URL if available
-          if (element.href) {
+          // Get URL if available - improved for new format
+          if (element.href && element.href.includes('/k/l/')) {
             url = element.href;
+          } else if (element.querySelector('a[href*="/k/l/"]')) {
+            url = element.querySelector('a[href*="/k/l/"]').href;
           } else if (element.querySelector('a')) {
             url = element.querySelector('a').href;
           }
@@ -98,50 +100,61 @@ async function scrapeZipRecruiter(searchUrl) {
               continue;
             }
 
-            // Extract job title (look for engineering/tech keywords)
+            // Extract job title (look for engineering/tech keywords) - improved for new format
             if (!title && (lowerLine.includes('engineer') || lowerLine.includes('developer') || 
                 lowerLine.includes('scientist') || lowerLine.includes('analyst') ||
                 lowerLine.includes('intern') || lowerLine.includes('full stack') ||
-                lowerLine.includes('software') || lowerLine.includes('data'))) {
+                lowerLine.includes('software') || lowerLine.includes('data') ||
+                lowerLine.includes('machine learning') || lowerLine.includes('ai') ||
+                lowerLine.includes('artificial intelligence'))) {
               title = line;
             }
             
-            // Extract company name (look for company indicators)
+            // Extract company name (look for company indicators) - improved for new format
             if (!company && (lowerLine.includes('inc') || lowerLine.includes('llc') || 
                 lowerLine.includes('corp') || lowerLine.includes('ltd') ||
                 lowerLine.includes('company') || lowerLine.includes('tech') ||
                 lowerLine.includes('systems') || lowerLine.includes('solutions') ||
-                lowerLine.includes('group') || lowerLine.includes('partners'))) {
+                lowerLine.includes('group') || lowerLine.includes('partners') ||
+                lowerLine.includes('&') || lowerLine.includes('and') ||
+                (line.length > 2 && line.length < 50 && !lowerLine.includes('remote') && 
+                 !lowerLine.includes('full-time') && !lowerLine.includes('part-time') &&
+                 !lowerLine.includes('contract') && !lowerLine.includes('temporary')))) {
               company = line;
             }
             
-            // Extract location (look for city, state patterns)
+            // Extract location (look for city, state patterns) - improved for new format
             if (!location && (lowerLine.includes(',') && 
                 (lowerLine.includes('ca') || lowerLine.includes('ny') || 
                  lowerLine.includes('tx') || lowerLine.includes('fl') || 
                  lowerLine.includes('wa') || lowerLine.includes('ma') ||
-                 lowerLine.includes('remote') || lowerLine.includes('us')))) {
+                 lowerLine.includes('il') || lowerLine.includes('co') ||
+                 lowerLine.includes('ga') || lowerLine.includes('dc') ||
+                 lowerLine.includes('remote') || lowerLine.includes('us') ||
+                 lowerLine.includes('united states')))) {
               location = line;
             }
 
-            // Extract posted date
+            // Extract posted date - improved for new format
             if (lowerLine.includes('ago') || lowerLine.includes('today') || 
-                lowerLine.includes('yesterday') || lowerLine.includes('week')) {
+                lowerLine.includes('yesterday') || lowerLine.includes('week') ||
+                lowerLine.includes('hour') || lowerLine.includes('day') ||
+                lowerLine.includes('minute') || lowerLine.includes('recent')) {
               postedDate = line;
             }
           }
 
-          // Create job object if we have a title
-          if (title && !processedJobs.has(title.toLowerCase())) {
+          // Create job object if we have a title - improved validation
+          if (title && title.length > 3 && !processedJobs.has(title.toLowerCase())) {
             processedJobs.add(title.toLowerCase());
             
             // Generate fallback URL if none found
             if (!url) {
-              url = `https://www.ziprecruiter.com/c/search?search=${encodeURIComponent(title)}`;
+              url = `https://www.ziprecruiter.com/jobs-search?search=${encodeURIComponent(title)}&refine_by_location_type=no_remote&radius=5000&days=1&refine_by_employment=employment_type%3Aall&refine_by_salary=&refine_by_salary_ceil=&lk=0aq8wal_FklwDhFiEGcMrw&page=1`;
             }
 
-            // Generate unique ID
-            const jobId = `ziprecruiter-${btoa(title + "_" + company).slice(0, 20)}`;
+            // Generate unique ID - improved for better uniqueness
+            const jobId = `ziprecruiter-${btoa(title + "_" + company + "_" + location).slice(0, 25)}`;
 
             results.push({
               id: jobId,
@@ -187,35 +200,43 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord") {
   
   const allJobs = [];
   const keywords = config.ziprecruiter.jobKeywords;
+  const locations = config.ziprecruiter.jobLocations;
   const jobLimit = mode === "comprehensive" ? config.ziprecruiter.jobLimits.comprehensive : config.ziprecruiter.jobLimits.discord;
+  const maxJobsPerSearch = config.ziprecruiter.maxJobsPerSearch;
+
+  // Calculate jobs per keyword-location combination
+  const totalCombinations = keywords.length * locations.length;
+  const jobsPerCombination = Math.ceil(jobLimit / totalCombinations);
 
   for (const keyword of keywords) {
-    try {
-      logger.log(`Scraping ZipRecruiter for: ${keyword}`);
-      
-      // Construct search URL
-      const days = getZipDays(timeFilter);
-      const searchUrl = `https://www.ziprecruiter.com/c/search?search=${encodeURIComponent(keyword)}&days=${days}`;
-      
-      const jobs = await scrapeZipRecruiter(searchUrl);
-      
-      if (jobs && jobs.length > 0) {
-        // Filter for relevant jobs
-        const relevantJobs = filterRelevantJobs(jobs, "intern");
-        logger.log(`Found ${relevantJobs.length} relevant jobs for ${keyword}`);
+    for (const location of locations) {
+      try {
+        logger.log(`Scraping ZipRecruiter for: ${keyword} in ${location}`);
         
-        // Apply date filtering for daily scraping (only jobs from last day)
-        const recentJobs = filterJobsByDate(relevantJobs, "day");
-        logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last day for ${keyword}`);
+        // Construct search URL with location using the correct ZipRecruiter format
+        const days = getZipDays(timeFilter);
+        const searchUrl = `https://www.ziprecruiter.com/jobs-search?search=${encodeURIComponent(keyword)}&location=${encodeURIComponent(location)}&refine_by_location_type=no_remote&radius=5000&days=${days}&refine_by_employment=employment_type%3Aall&refine_by_salary=&refine_by_salary_ceil=&lk=0aq8wal_FklwDhFiEGcMrw&page=1`;
         
-        // Limit jobs per keyword
-        const limitedJobs = recentJobs.slice(0, Math.ceil(jobLimit / keywords.length));
-        allJobs.push(...limitedJobs);
+        const jobs = await scrapeZipRecruiter(searchUrl);
+        
+        if (jobs && jobs.length > 0) {
+          // Filter for relevant jobs
+          const relevantJobs = filterRelevantJobs(jobs, "intern");
+          logger.log(`Found ${relevantJobs.length} relevant jobs for ${keyword} in ${location}`);
+          
+          // Apply date filtering for daily scraping (only jobs from last day)
+          const recentJobs = filterJobsByDate(relevantJobs, "day");
+          logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last day for ${keyword} in ${location}`);
+          
+          // Limit jobs per keyword-location combination
+          const limitedJobs = recentJobs.slice(0, jobsPerCombination);
+          allJobs.push(...limitedJobs);
+        }
+        
+        await delay(2000); // Delay between searches
+      } catch (error) {
+        logger.log(`Error scraping ${keyword} in ${location}: ${error.message}`, "error");
       }
-      
-      await delay(2000); // Delay between searches
-    } catch (error) {
-      logger.log(`Error scraping ${keyword}: ${error.message}`, "error");
     }
   }
 
@@ -224,7 +245,7 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord") {
     index === self.findIndex(j => j.id === job.id)
   ).slice(0, jobLimit);
 
-  logger.log(`ZipRecruiter scraping complete. Found ${uniqueJobs.length} unique jobs.`);
+  logger.log(`ZipRecruiter scraping complete. Found ${uniqueJobs.length} unique jobs across ${locations.length} locations.`);
 
   // Save to cache
   if (uniqueJobs.length > 0) {

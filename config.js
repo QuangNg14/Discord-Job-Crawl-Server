@@ -317,8 +317,20 @@ module.exports = {
       "ml engineer intern",
       "ai engineer intern",
     ],
-    jobLocations: [""],
-    maxJobsPerSearch: 8, // Lightweight for Discord commands
+    // Top 10 Tech Hub Cities in the US
+    jobLocations: [
+      "San Francisco, CA",
+      "New York, NY", 
+      "Seattle, WA",
+      "Austin, TX",
+      "Boston, MA",
+      "Los Angeles, CA",
+      "Chicago, IL",
+      "Denver, CO",
+      "Atlanta, GA",
+      "Washington, DC"
+    ],
+    maxJobsPerSearch: 5, // Reduced since we're searching multiple locations
     fileCache: "cache/ziprecruiter-job-cache.json",
     embedColor: "#1e90ff",
     timeFilters: {
@@ -327,50 +339,60 @@ module.exports = {
       month: "30",
     },
     jobLimits: {
-      discord: 8, // Lightweight for Discord commands
-      comprehensive: 50, // For internal script execution
+      discord: 15, // Increased since we're searching more locations
+      comprehensive: 80, // Increased for comprehensive mode
     },
   },
 
 
 
-  // Jobright.ai scraper configuration
+  // JobRight GitHub repositories scraper configuration
   jobright: {
-    baseUrl: "https://jobright.ai/jobs/search",
-    searches: [
+    // GitHub repositories to scrape
+    repos: [
       {
-        name: "Software Engineer Intern",
-        jobTitle: "Software Engineer",
+        name: "Data Analysis New Grad",
+        url: "https://github.com/jobright-ai/2025-Data-Analysis-New-Grad",
+        type: "new_grad",
+        category: "data_analysis"
       },
       {
-        name: "Data Engineer Intern",
-        jobTitle: "Data Engineer",
+        name: "Data Analysis Internship", 
+        url: "https://github.com/jobright-ai/2025-Data-Analysis-Internship",
+        type: "intern",
+        category: "data_analysis"
       },
       {
-        name: "Data Scientist Intern",
-        jobTitle: "Data Scientist",
+        name: "Software Engineer Internship",
+        url: "https://github.com/jobright-ai/2025-Software-Engineer-Internship", 
+        type: "intern",
+        category: "software_engineering"
       },
       {
-        name: "Machine Learning Engineer Intern",
-        jobTitle: "Machine Learning Engineer",
+        name: "Business Analyst Internship",
+        url: "https://github.com/jobright-ai/2025-Business-Analyst-Internship",
+        type: "intern", 
+        category: "business_analyst"
       },
       {
-        name: "ML Engineer Intern",
-        jobTitle: "ML Engineer",
+        name: "Software Engineer New Grad",
+        url: "https://github.com/jobright-ai/2025-Software-Engineer-New-Grad",
+        type: "new_grad",
+        category: "software_engineering"
       },
       {
-        name: "AI Engineer Intern",
-        jobTitle: "AI Engineer",
-      },
+        name: "Business Analyst New Grad",
+        url: "https://github.com/jobright-ai/2025-Business-Analyst-New-Grad",
+        type: "new_grad",
+        category: "business_analyst"
+      }
     ],
-    additionalParams:
-      "workModel=2&city=Within+US&seniority=1&jobTypes=1%2C2%2C3%2C4&radiusRange=50",
-    maxJobsPerSearch: 7, // Lightweight for Discord commands
+    maxJobsPerRepo: 10, // Maximum jobs per repository
     fileCache: "cache/jobright-job-cache.json",
     embedColor: "#1e90ff",
     jobLimits: {
-      discord: 7, // Lightweight for Discord commands
-      comprehensive: 50, // For internal script execution
+      discord: 15, // Lightweight for Discord commands
+      comprehensive: 100, // For internal script execution
     },
   },
 

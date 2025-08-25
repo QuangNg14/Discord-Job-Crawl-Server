@@ -392,6 +392,7 @@ function isRelevantJob(title, company, description, role = null) {
   const descriptionLower = (description || "").toLowerCase();
 
   // Skip jobs with "Company not specified" or "Location not specified"
+  // But be more lenient for JobRight jobs since they come from curated repositories
   if (companyLower.includes("company not specified") || 
       companyLower.includes("location not specified") ||
       companyLower.includes("unknown company")) {
@@ -400,8 +401,9 @@ function isRelevantJob(title, company, description, role = null) {
   }
 
   // Exclude non-software/data engineering roles
+  // Be more lenient for JobRight jobs since they come from curated repositories
   const excludedKeywords = [
-    // Non-software engineering roles
+    // Non-software engineering roles (more restrictive)
     "geotechnical", "civil", "mechanical", "electrical", "chemical", "biomedical",
     "environmental", "aerospace", "nuclear", "petroleum", "mining", "construction",
     "hvac", "plumbing", "welding", "manufacturing", "production", "assembly",
@@ -420,16 +422,15 @@ function isRelevantJob(title, company, description, role = null) {
     "power engineer", "control engineer", "instrumentation", "automation engineer",
     "industrial engineer", "logistics engineer", "supply chain engineer",
     
-    // Non-engineering roles
+    // Non-engineering roles (less restrictive for JobRight)
     "manager", "director", "lead", "principal", "senior", "staff", "architect",
     "consultant", "advisor", "specialist", "coordinator", "assistant", "associate",
     "internship coordinator", "recruiter", "hr", "human resources", "marketing",
-    "sales", "business", "finance", "accounting", "legal", "compliance", "regulatory",
+    "sales", "finance", "accounting", "legal", "compliance", "regulatory",
     "product manager", "project manager", "program manager", "scrum master",
-    "agile coach", "business analyst", "data analyst", "financial analyst",
-    "operations analyst", "market analyst", "research analyst", "policy analyst",
+    "agile coach", "financial analyst", "operations analyst", "market analyst", "research analyst", "policy analyst",
     
-    // Non-tech roles
+    // Non-tech roles (more restrictive)
     "customer service", "support", "help desk", "administrative", "clerical",
     "receptionist", "secretary", "office", "administrator", "coordinator",
     "teacher", "instructor", "professor", "educator", "tutor", "trainer",
@@ -463,6 +464,9 @@ function isRelevantJob(title, company, description, role = null) {
     "data engineer", "data scientist", "data analyst", "data analytics",
     "machine learning", "ml engineer", "ai engineer", "artificial intelligence",
     "analytics engineer", "business intelligence", "bi engineer",
+    
+    // Business analysis (for JobRight repositories)
+    "business analyst", "business analytics", "business intelligence",
     
     // DevOps/Infrastructure
     "devops", "site reliability", "sre", "infrastructure engineer",
@@ -529,7 +533,7 @@ function filterRelevantJobs(jobs, role = null) {
   }
 
   console.log(`🔍 Filtering ${jobs.length} jobs for role: ${role || "any"}`);
-  
+
   const filteredJobs = jobs.filter(job => {
     return isRelevantJob(
       job.title,
@@ -560,7 +564,10 @@ function filterJobsByDate(jobs, timeFilter = "day") {
 
   switch (timeFilter) {
     case "day":
-      cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24 hours ago
+      // For "day" filter, we want jobs from today and yesterday
+      // Set cutoff to start of yesterday
+      const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
+      cutoffDate = yesterday;
       break;
     case "week":
       cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
@@ -569,7 +576,9 @@ function filterJobsByDate(jobs, timeFilter = "day") {
       cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
       break;
     default:
-      cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Default to 24 hours
+      // For "day" filter, we want jobs from today and yesterday
+      const defaultYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
+      cutoffDate = defaultYesterday;
   }
 
   console.log(`🔍 Filtering ${jobs.length} jobs for posts since ${cutoffDate.toLocaleString()}`);
@@ -626,6 +635,24 @@ function filterJobsByDate(jobs, timeFilter = "day") {
               case 'month':
                 jobDate = new Date(now.getTime() - amount * 30 * 24 * 60 * 60 * 1000);
                 break;
+            }
+          }
+        }
+        // Handle JobRight date format like "Aug 24", "Aug 23"
+        else if (dateStr.match(/^[A-Za-z]{3}\s+\d{1,2}$/)) {
+          const monthMap = {
+            'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'may': 4, 'jun': 5,
+            'jul': 6, 'aug': 7, 'sep': 8, 'oct': 9, 'nov': 10, 'dec': 11
+          };
+          
+          const dateMatch = dateStr.toLowerCase().match(/(\w{3})\s+(\d+)/);
+          if (dateMatch) {
+            const month = monthMap[dateMatch[1]];
+            const day = parseInt(dateMatch[2]);
+            
+            if (month !== undefined && !isNaN(day)) {
+              // Create date at start of day to avoid time comparison issues
+              jobDate = new Date(now.getFullYear(), month, day, 0, 0, 0, 0);
             }
           }
         } else {

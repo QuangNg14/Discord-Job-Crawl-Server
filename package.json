@@ -18,6 +18,7 @@
         "test:github-age-format": "node test-github-age-format.js",
         "test:github-date-filtering-updated": "node test-github-date-filtering-updated.js",
         "test:github-age-parsing": "node test-github-age-parsing.js",
+        "test:jobright-ziprecruiter": "node test-jobright-ziprecruiter.js",
         "dev": "nodemon server.js",
         "dev:scrape": "nodemon scrape.js",
         "dev:daily": "nodemon daily-scraper.js"

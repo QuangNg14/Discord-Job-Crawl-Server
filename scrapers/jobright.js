@@ -8,12 +8,88 @@ const { EmbedBuilder } = require("discord.js");
 const { delay, filterRelevantJobs, filterJobsByDate } = require("../utils/helpers");
 
 /**
- * Scrape Jobright.ai search results
- * @param {string} searchUrl - Search URL
+ * JobRight GitHub repositories configuration
+ */
+const jobrightRepos = [
+  {
+    name: "Data Analysis New Grad",
+    url: "https://github.com/jobright-ai/2025-Data-Analysis-New-Grad",
+    type: "new_grad",
+    category: "data_analysis"
+  },
+  {
+    name: "Data Analysis Internship", 
+    url: "https://github.com/jobright-ai/2025-Data-Analysis-Internship",
+    type: "intern",
+    category: "data_analysis"
+  },
+  {
+    name: "Software Engineer Internship",
+    url: "https://github.com/jobright-ai/2025-Software-Engineer-Internship", 
+    type: "intern",
+    category: "software_engineering"
+  },
+  {
+    name: "Business Analyst Internship",
+    url: "https://github.com/jobright-ai/2025-Business-Analyst-Internship",
+    type: "intern", 
+    category: "business_analyst"
+  },
+  {
+    name: "Software Engineer New Grad",
+    url: "https://github.com/jobright-ai/2025-Software-Engineer-New-Grad",
+    type: "new_grad",
+    category: "software_engineering"
+  },
+  {
+    name: "Business Analyst New Grad",
+    url: "https://github.com/jobright-ai/2025-Business-Analyst-New-Grad",
+    type: "new_grad",
+    category: "business_analyst"
+  }
+];
+
+/**
+ * Parse date string to determine if job is recent (today or yesterday)
+ * @param {string} dateStr - Date string like "Aug 24", "Aug 23"
+ * @returns {boolean} Whether the job is from today or yesterday
+ */
+function isRecentJob(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return false;
+  
+  const now = new Date();
+  const currentMonth = now.getMonth(); // 0-11
+  const currentDay = now.getDate();
+  
+  // Parse date like "Aug 24"
+  const monthMap = {
+    'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'may': 4, 'jun': 5,
+    'jul': 6, 'aug': 7, 'sep': 8, 'oct': 9, 'nov': 10, 'dec': 11
+  };
+  
+  const dateMatch = dateStr.toLowerCase().match(/(\w{3})\s+(\d+)/);
+  if (!dateMatch) return false;
+  
+  const month = monthMap[dateMatch[1]];
+  const day = parseInt(dateMatch[2]);
+  
+  if (month === undefined || isNaN(day)) return false;
+  
+  // Check if it's today or yesterday
+  const jobDate = new Date(now.getFullYear(), month, day);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  
+  return jobDate.getTime() === today.getTime() || jobDate.getTime() === yesterday.getTime();
+}
+
+/**
+ * Scrape a JobRight GitHub repository
+ * @param {object} repo - Repository configuration
  * @returns {Array} Array of job objects
  */
-async function scrapeJobRight(searchUrl) {
-  logger.log(`Scraping Jobright.ai: ${searchUrl}`);
+async function scrapeJobRightRepo(repo) {
+  logger.log(`Scraping JobRight repo: ${repo.name} (${repo.url})`);
   let browser;
 
   try {
@@ -30,176 +106,147 @@ async function scrapeJobRight(searchUrl) {
         "Chrome/91.0.4472.124 Safari/537.36"
     );
 
-    await page.goto(searchUrl, {
+    await page.goto(repo.url, {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
     await delay(3000);
 
-    // Wait for job content to load
+    // Wait for content to load
     await page.waitForSelector("body", { timeout: 15000 });
 
     if (config.debugMode) {
       await page.screenshot({
-        path: `jr-debug-${Date.now()}.png`,
+        path: `jobright-repo-${Date.now()}.png`,
         fullPage: true,
       });
     }
 
-    // Extract job data with improved parsing
-    const jobs = await page.evaluate(() => {
+    // Extract job data from the README table
+    const jobs = await page.evaluate((repoConfig) => {
       const results = [];
       const processedJobs = new Set();
 
-      // Look for job cards or job-related elements
-      const jobElements = document.querySelectorAll('a[href*="/jobs/"], [class*="job"], [class*="card"], article, div[role="article"]');
+      // Look for table elements in the README
+      const tables = document.querySelectorAll('table');
       
-      jobElements.forEach((element) => {
-        try {
-          const textContent = element.textContent || element.innerText || "";
-          const cleanText = textContent.trim().replace(/\s+/g, ' ');
+      tables.forEach((table) => {
+        const rows = table.querySelectorAll('tr');
+        
+        // Skip header row
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          const cells = row.querySelectorAll('td');
           
-          if (cleanText.length < 20) return;
-
-          // Extract job information using regex patterns
-          let title = "";
-          let company = "";
-          let location = "";
-          let url = "";
-
-          // Get URL if available
-          if (element.href) {
-            url = element.href;
-          } else if (element.querySelector('a')) {
-            url = element.querySelector('a').href;
-          }
-
-          // Parse text content for job details
-          const lines = cleanText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-          
-          for (const line of lines) {
-            const lowerLine = line.toLowerCase();
-            
-            // Skip UI/navigation text
-            if (lowerLine.includes('home') || lowerLine.includes('about') || 
-                lowerLine.includes('contact') || lowerLine.includes('privacy') ||
-                lowerLine.includes('terms') || lowerLine.includes('login') ||
-                lowerLine.includes('sign up') || lowerLine.includes('search') ||
-                lowerLine.includes('apply now') || lowerLine.includes('match score')) {
-              continue;
-            }
-
-            // Extract job title (look for engineering/tech keywords)
-            if (!title && (lowerLine.includes('engineer') || lowerLine.includes('developer') || 
-                lowerLine.includes('scientist') || lowerLine.includes('analyst') ||
-                lowerLine.includes('intern') || lowerLine.includes('full stack') ||
-                lowerLine.includes('software') || lowerLine.includes('data'))) {
-              title = line;
-            }
-            
-            // Extract company name (look for company indicators)
-            if (!company && (lowerLine.includes('inc') || lowerLine.includes('llc') || 
-                lowerLine.includes('corp') || lowerLine.includes('ltd') ||
-                lowerLine.includes('company') || lowerLine.includes('tech') ||
-                lowerLine.includes('systems') || lowerLine.includes('solutions') ||
-                lowerLine.includes('group') || lowerLine.includes('partners'))) {
-              company = line;
-            }
-            
-            // Extract location (look for city, state patterns)
-            if (!location && (lowerLine.includes(',') && 
-                (lowerLine.includes('ca') || lowerLine.includes('ny') || 
-                 lowerLine.includes('tx') || lowerLine.includes('fl') || 
-                 lowerLine.includes('wa') || lowerLine.includes('ma') ||
-                 lowerLine.includes('remote') || lowerLine.includes('us')))) {
-              location = line;
+          if (cells.length >= 5) {
+            try {
+              const company = cells[0]?.textContent?.trim() || "";
+              const jobTitle = cells[1]?.textContent?.trim() || "";
+              const location = cells[2]?.textContent?.trim() || "";
+              const workModel = cells[3]?.textContent?.trim() || "";
+              const datePosted = cells[4]?.textContent?.trim() || "";
+              
+              // Skip if missing essential data
+              if (!company || !jobTitle || !datePosted) {
+                continue;
+              }
+              
+              // Create unique job ID
+              const jobId = `jobright-${btoa(company + "_" + jobTitle + "_" + datePosted).slice(0, 20)}`;
+              
+              // Skip if already processed
+              if (processedJobs.has(jobId)) {
+                continue;
+              }
+              processedJobs.add(jobId);
+              
+              // Create job object
+              const job = {
+                id: jobId,
+                title: jobTitle,
+                company: company,
+                location: location,
+                workModel: workModel,
+                postedDate: datePosted,
+                url: repoConfig.url,
+                description: `${jobTitle} at ${company} - ${location} (${workModel})`,
+                metadata: `Source: ${repoConfig.name}`,
+                salary: "",
+                source: "jobright",
+                repoType: repoConfig.type,
+                repoCategory: repoConfig.category,
+                repoName: repoConfig.name
+              };
+              
+              results.push(job);
+            } catch (error) {
+              console.log(`Error processing table row: ${error.message}`);
             }
           }
-
-          // Create job object if we have a title
-          if (title && !processedJobs.has(title.toLowerCase())) {
-            processedJobs.add(title.toLowerCase());
-            
-            // Generate fallback URL if none found
-            if (!url) {
-              url = `https://jobright.ai/jobs/search?q=${encodeURIComponent(title)}`;
-            }
-
-            // Generate unique ID
-            const jobId = `jobright-${btoa(title + "_" + company).slice(0, 20)}`;
-
-            results.push({
-              id: jobId,
-              title: title,
-              url: url,
-              company: company || "Company not specified",
-              location: location || "Location not specified",
-              postedDate: "Recent",
-              description: cleanText.substring(0, 200) + "...",
-              metadata: cleanText,
-              salary: "",
-              workModel: "",
-              source: "jobright",
-            });
-          }
-        } catch (error) {
-          console.log(`Error processing job element: ${error.message}`);
         }
       });
 
       return results;
-    });
+    }, repo);
 
-    logger.log(`Jobright.ai scraper found ${jobs.length} jobs.`);
+    logger.log(`JobRight repo ${repo.name} found ${jobs.length} jobs.`);
     await browser.close();
     return jobs;
   } catch (error) {
-    logger.log(`Error scraping Jobright.ai: ${error.message}`, "error");
+    logger.log(`Error scraping JobRight repo ${repo.name}: ${error.message}`, "error");
     if (browser) await browser.close();
     return [];
   }
 }
 
 /**
- * Main function to scrape Jobright.ai jobs
+ * Main function to scrape JobRight jobs from GitHub repositories
  * @param {object} client - Discord client (optional, if null won't post to Discord)
  * @param {string} mode - Scraping mode: "discord" or "comprehensive"
  * @param {string} role - Role type: "intern" or "new grad"
  * @returns {object} Object with jobs array and metadata
  */
 async function scrapeAllJobs(client, mode = "discord", role = "intern") {
-  logger.log("Starting Jobright.ai scraping process");
+  logger.log("Starting JobRight GitHub repositories scraping process");
   
   const allJobs = [];
-  const searches = config.jobright.searches;
   const jobLimit = mode === "comprehensive" ? config.jobright.jobLimits.comprehensive : config.jobright.jobLimits.discord;
 
-  for (const search of searches) {
+  // Filter repositories based on role
+  const relevantRepos = jobrightRepos.filter(repo => {
+    if (role === "intern") {
+      return repo.type === "intern";
+    } else if (role === "new grad") {
+      return repo.type === "new_grad";
+    }
+    return true; // Include all if no specific role filter
+  });
+
+  logger.log(`Scraping ${relevantRepos.length} JobRight repositories for ${role} roles`);
+
+  for (const repo of relevantRepos) {
     try {
-      logger.log(`Scraping Jobright.ai for: ${search.name}`);
+      logger.log(`Scraping JobRight repository: ${repo.name}`);
       
-      // Construct search URL
-      const searchUrl = `${config.jobright.baseUrl}?q=${encodeURIComponent(search.jobTitle)}&${config.jobright.additionalParams}`;
-      
-      const jobs = await scrapeJobRight(searchUrl);
+      const jobs = await scrapeJobRightRepo(repo);
       
       if (jobs && jobs.length > 0) {
-        // Filter for relevant jobs
-        const relevantJobs = filterRelevantJobs(jobs, role);
-        logger.log(`Found ${relevantJobs.length} relevant jobs for ${search.name}`);
+        // Filter for recent jobs (today and yesterday)
+        const recentJobs = jobs.filter(job => isRecentJob(job.postedDate));
+        logger.log(`Found ${recentJobs.length} recent jobs from ${repo.name} (${jobs.length} total)`);
         
-        // Apply date filtering for daily scraping (only jobs from last day)
-        const recentJobs = filterJobsByDate(relevantJobs, "day");
-        logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last day for ${search.name}`);
+        // Filter for relevant jobs based on title
+        const relevantJobs = filterRelevantJobs(recentJobs, role);
+        logger.log(`Found ${relevantJobs.length} relevant jobs from ${repo.name}`);
         
-        // Limit jobs per search
-        const limitedJobs = recentJobs.slice(0, Math.ceil(jobLimit / searches.length));
+        // Limit jobs per repository
+        const limitedJobs = relevantJobs.slice(0, Math.ceil(jobLimit / relevantRepos.length));
         allJobs.push(...limitedJobs);
       }
       
-      await delay(2000); // Delay between searches
+      await delay(2000); // Delay between repositories
     } catch (error) {
-      logger.log(`Error scraping ${search.name}: ${error.message}`, "error");
+      logger.log(`Error scraping ${repo.name}: ${error.message}`, "error");
     }
   }
 
@@ -208,21 +255,80 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern") {
     index === self.findIndex(j => j.id === job.id)
   ).slice(0, jobLimit);
 
-  logger.log(`Jobright.ai scraping complete. Found ${uniqueJobs.length} unique jobs.`);
+  logger.log(`JobRight scraping complete. Found ${uniqueJobs.length} unique recent jobs.`);
 
   // Save to cache
   if (uniqueJobs.length > 0) {
-    await mongoService.addJobsToCache("jobright", uniqueJobs);
+    await mongoService.addJobs(uniqueJobs, "jobright");
   }
 
   return {
     jobs: uniqueJobs,
     jobsFound: uniqueJobs.length,
-    source: "jobright"
+    source: "jobright",
+    success: true
+  };
+}
+
+/**
+ * Scrape a specific JobRight repository
+ * @param {string} repoName - Name of the repository to scrape
+ * @param {object} client - Discord client
+ * @param {string} mode - Scraping mode
+ * @param {string} role - Role type
+ * @returns {object} Object with jobs array and metadata
+ */
+async function scrapeSpecificRepo(repoName, client, mode = "discord", role = "intern") {
+  const repo = jobrightRepos.find(r => r.name.toLowerCase().includes(repoName.toLowerCase()));
+  
+  if (!repo) {
+    logger.log(`Repository not found: ${repoName}`, "error");
+    return {
+      jobs: [],
+      jobsFound: 0,
+      source: "jobright",
+      success: false,
+      error: `Repository not found: ${repoName}`
+    };
+  }
+
+  logger.log(`Scraping specific JobRight repository: ${repo.name}`);
+  
+  const jobs = await scrapeJobRightRepo(repo);
+  
+  if (jobs && jobs.length > 0) {
+    // Filter for recent jobs
+    const recentJobs = jobs.filter(job => isRecentJob(job.postedDate));
+    
+    // Filter for relevant jobs
+    const relevantJobs = filterRelevantJobs(recentJobs, role);
+    
+    logger.log(`Found ${relevantJobs.length} relevant recent jobs from ${repo.name}`);
+    
+    // Save to cache
+    if (relevantJobs.length > 0) {
+      await mongoService.addJobs(relevantJobs, "jobright");
+    }
+    
+    return {
+      jobs: relevantJobs,
+      jobsFound: relevantJobs.length,
+      source: "jobright",
+      success: true,
+      repoName: repo.name
+    };
+  }
+  
+  return {
+    jobs: [],
+    jobsFound: 0,
+    source: "jobright",
+    success: false
   };
 }
 
 module.exports = {
   scrapeAllJobs,
-  scrapeJobRight
+  scrapeSpecificRepo,
+  scrapeJobRightRepo
 };
