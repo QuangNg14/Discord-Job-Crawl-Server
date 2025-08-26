@@ -170,6 +170,7 @@ function createDailySummaryMessage(results, totalUniqueJobs) {
   summary += `⏭️ **${skippedSources}** sources skipped (optimization)\n`;
   summary += `❌ **${failedSources}** sources failed\n`;
   summary += `🎯 **${totalUniqueJobs}** unique jobs found\n`;
+  summary += `🎓 **Job Types:** Internships & New Graduate/Entry Level\n`;
   summary += `⏱️ Completed in **${duration}** seconds\n\n`;
 
   // Add optimization statistics if available
@@ -185,7 +186,8 @@ function createDailySummaryMessage(results, totalUniqueJobs) {
     summary += `**✅ Successfully Scraped:**\n`;
     results.successful.forEach(source => {
       const durationText = source.duration ? ` (${source.duration}ms)` : '';
-      summary += `• ${source.name} (${source.priority})${durationText}\n`;
+      const roleText = source.role ? ` [${source.role}]` : '';
+      summary += `• ${source.name} (${source.priority})${roleText}${durationText}\n`;
     });
     summary += `\n`;
   }
@@ -193,7 +195,8 @@ function createDailySummaryMessage(results, totalUniqueJobs) {
   if (results.skipped?.length > 0) {
     summary += `**⏭️ Skipped (Optimization):**\n`;
     results.skipped.forEach(source => {
-      summary += `• ${source.name} (${source.priority}): ${source.reason}\n`;
+      const roleText = source.role ? ` [${source.role}]` : '';
+      summary += `• ${source.name} (${source.priority})${roleText}: ${source.reason}\n`;
     });
     summary += `\n`;
   }
@@ -201,7 +204,8 @@ function createDailySummaryMessage(results, totalUniqueJobs) {
   if (results.failed?.length > 0) {
     summary += `**❌ Failed Sources:**\n`;
     results.failed.forEach(source => {
-      summary += `• ${source.name} (${source.priority}): ${source.reason}\n`;
+      const roleText = source.role ? ` [${source.role}]` : '';
+      summary += `• ${source.name} (${source.priority})${roleText}: ${source.reason}\n`;
     });
   }
 
@@ -258,10 +262,22 @@ function createSourceSummaryMessages(sourceName, jobs, metadata = {}) {
     if (priority) {
       headerMessage += `🎯 **${priority}** priority source\n`;
     }
+    if (metadata.role) {
+      const roleDisplay = metadata.role === "both" ? "Internships & New Grad" : 
+                         metadata.role === "intern" ? "Internships" : 
+                         metadata.role === "new_grad" ? "New Graduate" : metadata.role;
+      headerMessage += `🎓 **${roleDisplay}** roles\n`;
+    }
   } else if (skipped) {
     headerMessage += `⏭️ **Skipped** (Optimization)\n`;
     headerMessage += `📋 **${jobs.length}** existing jobs reused\n`;
     headerMessage += `💡 **Reason:** ${reason}\n`;
+    if (metadata.role) {
+      const roleDisplay = metadata.role === "both" ? "Internships & New Grad" : 
+                         metadata.role === "intern" ? "Internships" : 
+                         metadata.role === "new_grad" ? "New Graduate" : metadata.role;
+      headerMessage += `🎓 **${roleDisplay}** roles\n`;
+    }
   } else {
     headerMessage += `✅ **Successfully Scraped**\n`;
     headerMessage += `📊 **${jobs.length}** relevant jobs found\n`;
@@ -273,6 +289,12 @@ function createSourceSummaryMessages(sourceName, jobs, metadata = {}) {
     }
     if (priority) {
       headerMessage += `🎯 **${priority}** priority source\n`;
+    }
+    if (metadata.role) {
+      const roleDisplay = metadata.role === "both" ? "Internships & New Grad" : 
+                         metadata.role === "intern" ? "Internships" : 
+                         metadata.role === "new_grad" ? "New Graduate" : metadata.role;
+      headerMessage += `🎓 **${roleDisplay}** roles\n`;
     }
   }
   
@@ -507,11 +529,23 @@ function isRelevantJob(title, company, description, role = null) {
       console.log(`❌ Job filtered out (not an intern position): "${title}"`);
       return false;
     }
-  } else if (role === "new grad") {
+  } else if (role === "new_grad") {
     const newGradKeywords = ["new grad", "new graduate", "entry level", "entry-level", "junior", "recent graduate"];
     const hasNewGradKeyword = newGradKeywords.some(keyword => titleLower.includes(keyword));
     if (!hasNewGradKeyword) {
       console.log(`❌ Job filtered out (not a new grad position): "${title}"`);
+      return false;
+    }
+  } else if (role === "both") {
+    // For "both" role, accept either intern or new grad keywords
+    const internKeywords = ["intern", "internship", "co-op", "coop", "student"];
+    const newGradKeywords = ["new grad", "new graduate", "entry level", "entry-level", "junior", "recent graduate"];
+    
+    const hasInternKeyword = internKeywords.some(keyword => titleLower.includes(keyword));
+    const hasNewGradKeyword = newGradKeywords.some(keyword => titleLower.includes(keyword));
+    
+    if (!hasInternKeyword && !hasNewGradKeyword) {
+      console.log(`❌ Job filtered out (not an intern or new grad position): "${title}"`);
       return false;
     }
   }

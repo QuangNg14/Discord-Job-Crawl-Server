@@ -203,10 +203,10 @@ async function scrapeJobRightRepo(repo) {
  * Main function to scrape JobRight jobs from GitHub repositories
  * @param {object} client - Discord client (optional, if null won't post to Discord)
  * @param {string} mode - Scraping mode: "discord" or "comprehensive"
- * @param {string} role - Role type: "intern" or "new grad"
+ * @param {string} role - Role type: "intern", "new_grad", or "both"
  * @returns {object} Object with jobs array and metadata
  */
-async function scrapeAllJobs(client, mode = "discord", role = "intern") {
+async function scrapeAllJobs(client, mode = "discord", role = "both") {
   logger.log("Starting JobRight GitHub repositories scraping process");
   
   const allJobs = [];
@@ -216,8 +216,10 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern") {
   const relevantRepos = jobrightRepos.filter(repo => {
     if (role === "intern") {
       return repo.type === "intern";
-    } else if (role === "new grad") {
+    } else if (role === "new_grad") {
       return repo.type === "new_grad";
+    } else if (role === "both") {
+      return repo.type === "intern" || repo.type === "new_grad";
     }
     return true; // Include all if no specific role filter
   });
@@ -278,7 +280,7 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern") {
  * @param {string} role - Role type
  * @returns {object} Object with jobs array and metadata
  */
-async function scrapeSpecificRepo(repoName, client, mode = "discord", role = "intern") {
+async function scrapeSpecificRepo(repoName, client, mode = "discord", role = "both") {
   const repo = jobrightRepos.find(r => r.name.toLowerCase().includes(repoName.toLowerCase()));
   
   if (!repo) {

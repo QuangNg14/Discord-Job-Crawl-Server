@@ -31,10 +31,10 @@ module.exports = {
       low: ["jobright"] // Additional sources
     },
     jobLimits: {
-      linkedin: 75, // Higher limit for LinkedIn (most important)
-      github: 100, // Higher limit for GitHub repos
-      ziprecruiter: 50,
-      jobright: 50
+      linkedin: 150, // Higher limit for LinkedIn (most important) - increased for both roles
+      github: 200, // Higher limit for GitHub repos - increased for both roles
+      ziprecruiter: 80, // Reduced for efficiency - 8 keywords × 5 locations × 2 roles
+      jobright: 100 // Increased for both roles
     },
     notifications: {
       start: true, // Notify when scraping starts
@@ -56,14 +56,17 @@ module.exports = {
     },
     maxCacheSize: 5000, // Maximum number of jobs to keep in cache per source - increased for comprehensive scraping
     // Connection settings
-    connectionTimeout: 10000, // 10 seconds - increased for better reliability
-    serverSelectionTimeout: 10000, // 10 seconds - increased for better reliability
-    socketTimeout: 10000, // 10 seconds - increased for better reliability
+    connectionTimeout: 15000, // 15 seconds - increased for container environments
+    serverSelectionTimeout: 15000, // 15 seconds - increased for container environments
+    socketTimeout: 15000, // 15 seconds - increased for container environments
     retryWrites: true,
     retryReads: true,
-    // SSL/TLS settings for better compatibility
-    ssl: false, // Disable SSL for local development
-    tls: false, // Disable TLS for local development
+    // TLS settings for container environments (removed deprecated SSL options)
+    tls: process.env.MONGO_TLS === "true" || process.env.MONGO_URI?.includes('mongodb+srv://'),
+    // TLS options for container environments
+    tlsAllowInvalidCertificates: process.env.MONGO_TLS_ALLOW_INVALID === "true", // For self-signed certs
+    tlsAllowInvalidHostnames: process.env.MONGO_TLS_ALLOW_INVALID_HOSTNAMES === "true", // For hostname mismatches
+    tlsInsecure: process.env.MONGO_TLS_INSECURE === "true", // For development/testing only
   },
 
   // Anti-Detection and Security Configuration
@@ -247,24 +250,30 @@ module.exports = {
   // - Discord commands are lightweight (5-10 jobs), comprehensive mode only for internal use
   linkedin: {
     jobKeywords: [
+      // Internship keywords
       "software engineer intern",
-      "software engineer new grad",
-      "software engineer entry level",
       "software development intern",
-      "software development new grad",
       "data engineer intern",
-      "data engineer new grad",
-      "data engineer entry level",
       "data scientist intern",
-      "data scientist new grad",
-      "data scientist entry level",
       "machine learning intern",
       "machine learning engineer intern",
-      "machine learning engineer new grad",
       "ml engineer intern",
-      "ml engineer new grad",
       "ai engineer intern",
+      // New graduate/entry level keywords
+      "software engineer new grad",
+      "software engineer entry level",
+      "software development new grad",
+      "software development entry level",
+      "data engineer new grad",
+      "data engineer entry level",
+      "data scientist new grad",
+      "data scientist entry level",
+      "machine learning engineer new grad",
+      "machine learning engineer entry level",
+      "ml engineer new grad",
+      "ml engineer entry level",
       "ai engineer new grad",
+      "ai engineer entry level",
     ],
     jobLocations: ["United States"],
     maxJobsPerSearch: 50, // Increased from 5 for comprehensive scraping
@@ -305,30 +314,24 @@ module.exports = {
   // ZipRecruiter scraper configuration
   ziprecruiter: {
     jobKeywords: [
+      // Primary internship keywords (4 total)
       "software engineer intern",
-      "software engineer new grad",
-      "software engineer entry level",
       "data engineer intern",
-      "data engineer new grad",
-      "data scientist intern",
-      "data scientist new grad",
       "machine learning intern",
-      "machine learning engineer intern",
-      "ml engineer intern",
       "ai engineer intern",
+      // Primary new graduate/entry level keywords (4 total)
+      "software engineer new grad",
+      "data engineer new grad",
+      "machine learning engineer new grad",
+      "ai engineer new grad",
     ],
-    // Top 10 Tech Hub Cities in the US
+    // Top 5 Tech Hub Cities in the US (reduced for efficiency)
     jobLocations: [
       "San Francisco, CA",
       "New York, NY", 
       "Seattle, WA",
       "Austin, TX",
-      "Boston, MA",
-      "Los Angeles, CA",
-      "Chicago, IL",
-      "Denver, CO",
-      "Atlanta, GA",
-      "Washington, DC"
+      "Boston, MA"
     ],
     maxJobsPerSearch: 5, // Reduced since we're searching multiple locations
     fileCache: "cache/ziprecruiter-job-cache.json",
@@ -339,8 +342,8 @@ module.exports = {
       month: "30",
     },
     jobLimits: {
-      discord: 15, // Increased since we're searching more locations
-      comprehensive: 80, // Increased for comprehensive mode
+      discord: 10, // Reduced for efficiency
+      comprehensive: 80, // Reduced for comprehensive mode (both roles)
     },
   },
 
@@ -392,7 +395,7 @@ module.exports = {
     embedColor: "#1e90ff",
     jobLimits: {
       discord: 15, // Lightweight for Discord commands
-      comprehensive: 100, // For internal script execution
+      comprehensive: 200, // For internal script execution (both roles)
     },
   },
 
@@ -439,22 +442,6 @@ module.exports = {
 
   // Enhanced scraping targets - sites known for blocking bots
   enhancedScrapingTargets: {
-    glassdoor: {
-      useAi: true,
-      selectors: {
-        jobCard: "[data-test='jobListing']",
-        title: "[data-test='job-title']",
-        company: "[data-test='employer-name']",
-        location: "[data-test='job-location']",
-        salary: "[data-test='job-salary']",
-      },
-      commonObstacles: [
-        "cookie consent",
-        "location permission",
-        "email signup popup",
-        "app download prompt",
-      ],
-    },
     linkedin: {
       useAi: true,
       selectors: {
@@ -497,14 +484,13 @@ module.exports = {
     maxInteractionAttempts: 3, // How many times AI tries to bypass obstacles
     waitForNetworkIdle: true, // Wait for page to fully load
     timeoutSeconds: 30,
-    // Sites that benefit most from AI-enhanced scraping
-    prioritySites: [
-      "glassdoor.com", // Heavy anti-bot measures
-      "indeed.com", // Cookie consent, location prompts
-      "linkedin.com", // Login walls, consent banners
-      "ziprecruiter.com", // Newsletter prompts
-      "monster.com", // Various popups
-    ],
+         // Sites that benefit most from AI-enhanced scraping
+     prioritySites: [
+       "indeed.com", // Cookie consent, location prompts
+       "linkedin.com", // Login walls, consent banners
+       "ziprecruiter.com", // Newsletter prompts
+       "monster.com", // Various popups
+     ],
     // Fallback behavior when AI scraping fails
     fallbackToTraditional: true,
     fallbackTimeout: 10, // seconds before falling back

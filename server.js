@@ -63,9 +63,28 @@ client.on("interactionCreate", (i) => {
   commandHandler.handleSlash(i, client);
 });
 
-// Health check endpoint
+// Health check endpoint for Azure Container Instances
 app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", message: "Bot is running" });
+  const healthStatus = {
+    status: "ok",
+    message: "Bot is running",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    discord: client?.user ? "connected" : "disconnected",
+    mongo: mongoService.isConnected() ? "connected" : "disconnected"
+  };
+  
+  res.status(200).json(healthStatus);
+});
+
+// Additional health check for container orchestration
+app.get("/ready", (req, res) => {
+  res.status(200).json({ 
+    status: "ready", 
+    message: "Service is ready to accept requests",
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Start the server

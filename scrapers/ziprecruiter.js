@@ -193,9 +193,10 @@ async function scrapeZipRecruiter(searchUrl) {
  * @param {string} timeFilter - Time filter for jobs
  * @param {object} client - Discord client (optional)
  * @param {string} mode - Scraping mode: "discord" or "comprehensive"
+ * @param {string} role - Role type: "intern", "new_grad", or "both"
  * @returns {object} Object with jobs array and metadata
  */
-async function scrapeAllJobs(timeFilter, client, mode = "discord") {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
   logger.log("Starting ZipRecruiter scraping process");
   
   const allJobs = [];
@@ -221,8 +222,8 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord") {
         
         if (jobs && jobs.length > 0) {
           // Filter for relevant jobs
-          const relevantJobs = filterRelevantJobs(jobs, "intern");
-          logger.log(`Found ${relevantJobs.length} relevant jobs for ${keyword} in ${location}`);
+          const relevantJobs = filterRelevantJobs(jobs, role);
+          logger.log(`Found ${relevantJobs.length} relevant jobs for ${keyword} in ${location} (role: ${role})`);
           
           // Apply date filtering for daily scraping (only jobs from last day)
           const recentJobs = filterJobsByDate(relevantJobs, "day");
@@ -249,7 +250,7 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord") {
 
   // Save to cache
   if (uniqueJobs.length > 0) {
-    await mongoService.addJobsToCache("ziprecruiter", uniqueJobs);
+    await mongoService.addJobs(uniqueJobs, "ziprecruiter");
   }
 
   return {

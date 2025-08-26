@@ -7,16 +7,13 @@ const logger = require("./logger");
 let mongoClient;
 let db;
 let collections = {};
+let isConnected = false;
 
 // In-memory job caches for each source
 const jobCaches = {
   linkedin: new Set(),
-  simplyhired: new Set(),
   ziprecruiter: new Set(),
-  careerjet: new Set(),
   jobright: new Set(),
-  glassdoor: new Set(),
-  dice: new Set(),
   github: new Set(),
 };
 
@@ -25,23 +22,44 @@ async function connect() {
   try {
     logger.log("Connecting to MongoDB...");
     
-    // Enhanced MongoDB connection options to handle SSL/TLS issues
+    // Enhanced MongoDB connection options to handle SSL/TLS issues in containers
     const mongoOptions = {
-      serverSelectionTimeoutMS: config.mongo.serverSelectionTimeout || 5000,
-      connectTimeoutMS: config.mongo.connectionTimeout || 5000,
-      socketTimeoutMS: config.mongo.socketTimeout || 5000,
+      serverSelectionTimeoutMS: config.mongo.serverSelectionTimeout || 15000,
+      connectTimeoutMS: config.mongo.connectionTimeout || 15000,
+      socketTimeoutMS: config.mongo.socketTimeout || 15000,
       retryWrites: config.mongo.retryWrites || true,
       retryReads: config.mongo.retryReads || true,
-      // SSL/TLS configuration - simplified for local development
-      ssl: false, // Disable SSL for local development
-      tls: false, // Disable TLS for local development
     };
 
-    // If using MongoDB Atlas or remote MongoDB with SSL, enable SSL
-    if (config.mongo.uri.includes('mongodb+srv://') || config.mongo.uri.includes('ssl=true')) {
-      mongoOptions.ssl = true;
-      mongoOptions.tls = true;
+    // TLS configuration for container environments (removed deprecated SSL options)
+    if (config.mongo.tls) {
+      mongoOptions.tls = config.mongo.tls;
+      
+      // Handle conflicting TLS options - prioritize tlsInsecure over tlsAllowInvalidCertificates
+      if (config.mongo.tlsInsecure === true) {
+        mongoOptions.tlsInsecure = true;
+        // Don't set tlsAllowInvalidCertificates when tlsInsecure is true
+      } else if (config.mongo.tlsAllowInvalidCertificates !== undefined) {
+        mongoOptions.tlsAllowInvalidCertificates = config.mongo.tlsAllowInvalidCertificates;
+      }
+      
+      if (config.mongo.tlsAllowInvalidHostnames !== undefined) {
+        mongoOptions.tlsAllowInvalidHostnames = config.mongo.tlsAllowInvalidHostnames;
+      }
     }
+
+    // Log connection options for debugging (without sensitive data)
+    logger.log(`MongoDB connection options: ${JSON.stringify({
+      serverSelectionTimeoutMS: mongoOptions.serverSelectionTimeoutMS,
+      connectTimeoutMS: mongoOptions.connectTimeoutMS,
+      socketTimeoutMS: mongoOptions.socketTimeoutMS,
+      retryWrites: mongoOptions.retryWrites,
+      retryReads: mongoOptions.retryReads,
+      tls: mongoOptions.tls,
+      tlsAllowInvalidCertificates: mongoOptions.tlsAllowInvalidCertificates,
+      tlsAllowInvalidHostnames: mongoOptions.tlsAllowInvalidHostnames,
+      tlsInsecure: mongoOptions.tlsInsecure
+    })}`);
 
     mongoClient = new MongoClient(config.mongo.uri, mongoOptions);
     await mongoClient.connect();
@@ -49,32 +67,25 @@ async function connect() {
 
     // Initialize collections for each source
     collections.linkedin = db.collection(config.mongo.collections.linkedin);
-    collections.simplyhired = db.collection(
-      config.mongo.collections.simplyhired
-    );
     collections.ziprecruiter = db.collection(
       config.mongo.collections.ziprecruiter
     );
-    collections.careerjet = db.collection(config.mongo.collections.careerjet);
     collections.jobright = db.collection(config.mongo.collections.jobright);
-    collections.glassdoor = db.collection(config.mongo.collections.glassdoor);
-    collections.dice = db.collection(config.mongo.collections.dice);
     collections.github = db.collection(config.mongo.collections.github);
 
     // Create indexes for faster lookups
     await collections.linkedin.createIndex({ jobId: 1 }, { unique: true });
-    await collections.simplyhired.createIndex({ jobId: 1 }, { unique: true });
     await collections.ziprecruiter.createIndex({ jobId: 1 }, { unique: true });
-    await collections.careerjet.createIndex({ jobId: 1 }, { unique: true });
     await collections.jobright.createIndex({ jobId: 1 }, { unique: true });
-    await collections.glassdoor.createIndex({ jobId: 1 }, { unique: true });
-    await collections.dice.createIndex({ jobId: 1 }, { unique: true });
     await collections.github.createIndex({ jobId: 1 }, { unique: true });
 
     logger.log("Successfully connected to MongoDB");
+    isConnected = true;
     return true;
   } catch (error) {
     logger.log(`Error connecting to MongoDB: ${error.message}`, "error");
+    logger.log(`MongoDB URI: ${config.mongo.uri ? 'Set' : 'Not set'}`, "error");
+    logger.log(`Database Name: ${config.mongo.dbName}`, "error");
     return false;
   }
 }
@@ -83,12 +94,8 @@ async function connect() {
 async function loadCache() {
   try {
     await loadSourceCache("linkedin");
-    await loadSourceCache("simplyhired");
     await loadSourceCache("ziprecruiter");
-    await loadSourceCache("careerjet");
     await loadSourceCache("jobright");
-    await loadSourceCache("glassdoor");
-    await loadSourceCache("dice");
     await loadSourceCache("github");
   } catch (error) {
     logger.log(`Error loading job caches: ${error.message}`, "error");
@@ -135,18 +142,10 @@ function getFileCachePath(source) {
   switch (source) {
     case "linkedin":
       return config.linkedin.fileCache;
-    case "simplyhired":
-      return config.simplyhired.fileCache;
     case "ziprecruiter":
       return config.ziprecruiter.fileCache;
-    case "careerjet":
-      return config.careerjet.fileCache;
     case "jobright":
       return config.jobright.fileCache;
-    case "glassdoor":
-      return config.glassdoor.fileCache;
-    case "dice":
-      return config.dice.fileCache;
     case "github":
       return config.github.fileCache;
 
@@ -391,12 +390,8 @@ async function clearCache(source) {
 // Clear all job caches
 async function clearAllCaches() {
   await clearCache("linkedin");
-  await clearCache("simplyhired");
   await clearCache("ziprecruiter");
-  await clearCache("careerjet");
   await clearCache("jobright");
-  await clearCache("glassdoor");
-  await clearCache("dice");
   await clearCache("github");
 
   return true;
@@ -449,32 +444,20 @@ async function getCacheStats(source) {
 // Get cache statistics for all sources
 async function getAllCacheStats() {
   const linkedinStats = await getCacheStats("linkedin");
-  const simplyhiredStats = await getCacheStats("simplyhired");
   const ziprecruiterStats = await getCacheStats("ziprecruiter");
-  const careerjetStats = await getCacheStats("careerjet");
   const jobrightStats = await getCacheStats("jobright");
-  const glassdoorStats = await getCacheStats("glassdoor");
-  const diceStats = await getCacheStats("dice");
   const githubStats = await getCacheStats("github");
 
   return {
     linkedin: linkedinStats,
-    simplyhired: simplyhiredStats,
     ziprecruiter: ziprecruiterStats,
-    careerjet: careerjetStats,
     jobright: jobrightStats,
-    glassdoor: glassdoorStats,
-    dice: diceStats,
     github: githubStats,
 
     total:
       linkedinStats.count +
-      simplyhiredStats.count +
       ziprecruiterStats.count +
-      careerjetStats.count +
       jobrightStats.count +
-      glassdoorStats.count +
-      diceStats.count +
       githubStats.count,
   };
 }
@@ -524,6 +507,7 @@ async function pruneCache(source) {
 async function close() {
   if (mongoClient) {
     await mongoClient.close();
+    isConnected = false;
     logger.log("MongoDB connection closed.");
   }
 }
@@ -576,4 +560,5 @@ module.exports = {
   getAllCacheStats,
   close,
   getJobsFromSource,
+  isConnected: () => isConnected,
 };
