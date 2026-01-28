@@ -151,7 +151,7 @@ async function scrapeJobRightRepo(repo) {
                 continue;
               }
               
-              // Create unique job ID
+              // Create unique job ID and add category from repo
               const jobId = `jobright-${btoa(company + "_" + jobTitle + "_" + datePosted).slice(0, 20)}`;
               
               // Skip if already processed
@@ -173,8 +173,8 @@ async function scrapeJobRightRepo(repo) {
                 metadata: `Source: ${repoConfig.name}`,
                 salary: "",
                 source: "jobright",
-                repoType: repoConfig.type,
-                repoCategory: repoConfig.category,
+                role: repoConfig.type,
+                category: repoConfig.category,
                 repoName: repoConfig.name
               };
               

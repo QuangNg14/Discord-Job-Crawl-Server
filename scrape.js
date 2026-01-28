@@ -4,15 +4,15 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const config = require("./config");
 const loggerService = require("./services/logger");
 const mongoService = require("./services/mongo");
-const { 
-  deduplicateJobs, 
-  createDiscordJobMessages, 
+const {
+  deduplicateJobs,
+  createDiscordJobMessages,
   createDailySummaryMessage,
   createSourceSummaryMessages,
   sendSourceSummaryToDiscord,
   filterRelevantJobs,
   normalizeJob,
-  generateJobId
+  generateJobId,
 } = require("./utils/helpers");
 
 // Import all scrapers
@@ -63,16 +63,22 @@ const availableScrapers = {
  */
 async function shouldSkipSource(sourceName) {
   const optimization = config.dailyScraping.optimization;
-  
+
   if (!optimization.enabled || !optimization.intelligentSkipping) {
     return { shouldSkip: false, reason: "Optimization disabled" };
   }
 
   try {
-    const skipResult = await mongoService.shouldSkipSource(sourceName, optimization.cacheTimeRange);
+    const skipResult = await mongoService.shouldSkipSource(
+      sourceName,
+      optimization.cacheTimeRange
+    );
     return skipResult;
   } catch (error) {
-    loggerService.log(`Error checking skip status for ${sourceName}: ${error.message}`, "error");
+    loggerService.log(
+      `Error checking skip status for ${sourceName}: ${error.message}`,
+      "error"
+    );
     return { shouldSkip: false, reason: "Error occurred" };
   }
 }
@@ -85,11 +91,19 @@ async function shouldSkipSource(sourceName) {
  */
 async function getExistingJobs(sourceName, timeRange = "day") {
   try {
-    const existingJobs = await mongoService.getRecentJobs(sourceName, timeRange);
-    loggerService.log(`📋 Found ${existingJobs.length} existing jobs for ${sourceName} (${timeRange})`);
+    const existingJobs = await mongoService.getRecentJobs(
+      sourceName,
+      timeRange
+    );
+    loggerService.log(
+      `📋 Found ${existingJobs.length} existing jobs for ${sourceName} (${timeRange})`
+    );
     return existingJobs;
   } catch (error) {
-    loggerService.log(`Error getting existing jobs for ${sourceName}: ${error.message}`, "error");
+    loggerService.log(
+      `Error getting existing jobs for ${sourceName}: ${error.message}`,
+      "error"
+    );
     return [];
   }
 }
@@ -98,123 +112,177 @@ async function getExistingJobs(sourceName, timeRange = "day") {
  * Collect jobs from a scraper with intelligent caching and send individual summaries
  * @param {Function} scraperFunction - The scraper function to call
  * @param {string} sourceName - Name of the source
- * @param {object} channel - Discord channel for sending summaries
+ * @param {object} channel - Discord channel for sending summaries (legacy, will use client for routing)
+ * @param {object} client - Discord client for channel routing
  * @param {string} priority - Priority level of the source
  * @param {string} role - Role type (intern, new_grad, or both)
  * @returns {Object} Object with jobs and metadata
  */
-async function collectJobsFromSource(scraperFunction, sourceName, channel, priority, role = "both") {
+async function collectJobsFromSource(
+  scraperFunction,
+  sourceName,
+  channel,
+  client,
+  priority,
+  role = "both"
+) {
   const optimization = config.dailyScraping.optimization;
   const startTime = Date.now();
-  
+
   try {
-    loggerService.log(`🔍 Collecting jobs from ${sourceName} for role: ${role}...`);
-    
+    loggerService.log(
+      `🔍 Collecting jobs from ${sourceName} for role: ${role}...`
+    );
+
     // Check if we should skip this source
     const skipDecision = await shouldSkipSource(sourceName);
     if (skipDecision.shouldSkip) {
       loggerService.log(`⏭️ Skipping ${sourceName}: ${skipDecision.reason}`);
-      
+
       // Get existing jobs if we're reusing them
       let existingJobs = [];
       if (optimization.reuseExistingJobs) {
-        existingJobs = await getExistingJobs(sourceName, optimization.cacheTimeRange);
-        loggerService.log(`📋 Reusing ${existingJobs.length} existing jobs from ${sourceName}`);
+        existingJobs = await getExistingJobs(
+          sourceName,
+          optimization.cacheTimeRange
+        );
+        loggerService.log(
+          `📋 Reusing ${existingJobs.length} existing jobs from ${sourceName}`
+        );
       }
-      
+
       // Send skip notification to Discord
-      if (channel) {
-        await sendSourceSummaryToDiscord(channel, sourceName, existingJobs, {
-          skipped: true,
-          reason: skipDecision.reason,
-          priority: priority,
-          role: role,
-          duration: Date.now() - startTime
-        }, delay);
+      if (client) {
+        await sendSourceSummaryToDiscord(
+          null,
+          sourceName,
+          existingJobs,
+          {
+            client: client,
+            skipped: true,
+            reason: skipDecision.reason,
+            priority: priority,
+            role: role,
+            duration: Date.now() - startTime,
+          },
+          delay
+        );
       }
-      
+
       return {
         jobs: existingJobs,
         jobsFound: existingJobs.length,
         skipped: true,
         reason: skipDecision.reason,
-        duration: Date.now() - startTime
+        duration: Date.now() - startTime,
       };
     }
-    
+
     // Create a mock client for job collection
     const mockClient = {
       channels: {
         cache: {
-          get: () => null // Don't send messages during collection
-        }
-      }
+          get: () => null, // Don't send messages during collection
+        },
+      },
     };
 
     // Call the scraper function with the specified role
     const result = await scraperFunction(mockClient, role);
-    
+
     if (result && result.jobsFound > 0) {
-      loggerService.log(`✅ Collected ${result.jobsFound} jobs from ${sourceName} (${role}) in ${Date.now() - startTime}ms`);
-      
+      loggerService.log(
+        `✅ Collected ${
+          result.jobsFound
+        } jobs from ${sourceName} (${role}) in ${Date.now() - startTime}ms`
+      );
+
       // Send individual source summary to Discord
-      if (channel) {
-        await sendSourceSummaryToDiscord(channel, sourceName, result.jobs || [], {
-          jobsFound: result.jobsFound,
-          priority: priority,
-          role: role,
-          duration: Date.now() - startTime
-        }, delay);
+      if (client) {
+        await sendSourceSummaryToDiscord(
+          null,
+          sourceName,
+          result.jobs || [],
+          {
+            client: client,
+            jobsFound: result.jobsFound,
+            priority: priority,
+            role: role,
+            duration: Date.now() - startTime,
+          },
+          delay
+        );
       }
-      
+
       return {
         jobs: result.jobs || [],
         jobsFound: result.jobsFound,
         skipped: false,
         reason: "Successfully scraped",
-        duration: Date.now() - startTime
+        duration: Date.now() - startTime,
       };
     } else {
-      loggerService.log(`⚠️ No jobs collected from ${sourceName} (${role}) in ${Date.now() - startTime}ms`);
-      
+      loggerService.log(
+        `⚠️ No jobs collected from ${sourceName} (${role}) in ${
+          Date.now() - startTime
+        }ms`
+      );
+
       // Send empty summary to Discord
-      if (channel) {
-        await sendSourceSummaryToDiscord(channel, sourceName, [], {
-          jobsFound: 0,
-          priority: priority,
-          role: role,
-          duration: Date.now() - startTime
-        }, delay);
+      if (client) {
+        await sendSourceSummaryToDiscord(
+          null,
+          sourceName,
+          [],
+          {
+            client: client,
+            jobsFound: 0,
+            priority: priority,
+            role: role,
+            duration: Date.now() - startTime,
+          },
+          delay
+        );
       }
-      
+
       return {
         jobs: [],
         jobsFound: 0,
         skipped: false,
         reason: "No jobs found",
-        duration: Date.now() - startTime
+        duration: Date.now() - startTime,
       };
     }
   } catch (error) {
-    loggerService.log(`❌ Error collecting jobs from ${sourceName} (${role}): ${error.message}`, "error");
-    
+    loggerService.log(
+      `❌ Error collecting jobs from ${sourceName} (${role}): ${error.message}`,
+      "error"
+    );
+
     // Send error summary to Discord
-    if (channel) {
-      await sendSourceSummaryToDiscord(channel, sourceName, [], {
-        jobsFound: 0,
-        priority: priority,
-        role: role,
-        duration: Date.now() - startTime,
-        error: error.message
-      }, delay);
+    if (client) {
+      await sendSourceSummaryToDiscord(
+        null,
+        sourceName,
+        [],
+        {
+          client: client,
+          jobsFound: 0,
+          priority: priority,
+          role: role,
+          duration: Date.now() - startTime,
+          error: error.message,
+        },
+        delay
+      );
     }
-    
+
     return {
       jobs: [],
       jobsFound: 0,
       skipped: false,
       reason: `Error: ${error.message}`,
-      duration: Date.now() - startTime
+      duration: Date.now() - startTime,
     };
   }
 }
@@ -223,34 +291,53 @@ async function collectJobsFromSource(scraperFunction, sourceName, channel, prior
  * Run scrapers in parallel for a given priority level
  * @param {Array} tasks - Array of scraping tasks
  * @param {string} priority - Priority level
- * @param {object} channel - Discord channel for sending summaries
+ * @param {object} channel - Discord channel for sending summaries (legacy)
+ * @param {object} client - Discord client for channel routing
  * @returns {Array} Array of results
  */
-async function runParallelScraping(tasks, priority, channel) {
+async function runParallelScraping(tasks, priority, channel, client) {
   const optimization = config.dailyScraping.optimization;
-  
+
   if (!optimization.parallelScraping) {
     // Sequential processing
     const results = [];
     for (const task of tasks) {
-      const result = await collectJobsFromSource(task.scraper, task.name, channel, priority, task.role);
+      const result = await collectJobsFromSource(
+        task.scraper,
+        task.name,
+        channel,
+        client,
+        priority,
+        task.role
+      );
       results.push({ ...result, name: task.name, priority, role: task.role });
       await delay(2000); // Delay between sources
     }
     return results;
   }
-  
+
   // Parallel processing
-  loggerService.log(`🚀 Running ${tasks.length} ${priority}-priority sources in parallel...`);
-  
+  loggerService.log(
+    `🚀 Running ${tasks.length} ${priority}-priority sources in parallel...`
+  );
+
   const promises = tasks.map(async (task) => {
-    const result = await collectJobsFromSource(task.scraper, task.name, channel, priority, task.role);
+    const result = await collectJobsFromSource(
+      task.scraper,
+      task.name,
+      channel,
+      client,
+      priority,
+      task.role
+    );
     return { ...result, name: task.name, priority, role: task.role };
   });
-  
+
   const results = await Promise.all(promises);
-  loggerService.log(`✅ Completed parallel scraping for ${priority}-priority sources`);
-  
+  loggerService.log(
+    `✅ Completed parallel scraping for ${priority}-priority sources`
+  );
+
   return results;
 }
 
@@ -288,12 +375,20 @@ async function runSpecificScraper(sourceName, client) {
     );
 
     // Send individual source summary to Discord
-    if (channel && result && result.jobs) {
-      await sendSourceSummaryToDiscord(channel, scraper.name, result.jobs, {
-        jobsFound: result.jobsFound || 0,
-        duration: duration * 1000, // Convert to milliseconds
-        priority: "specific"
-      }, delay);
+    if (client && result && result.jobs) {
+      await sendSourceSummaryToDiscord(
+        null,
+        scraper.name,
+        result.jobs,
+        {
+          client: client,
+          jobsFound: result.jobsFound || 0,
+          duration: duration * 1000, // Convert to milliseconds
+          priority: "specific",
+          role: "both", // Default to both for specific scraper
+        },
+        delay
+      );
     } else if (channel) {
       // Fallback to old format if no jobs data
       const embed = {
@@ -359,52 +454,56 @@ async function runComprehensiveScrape(client) {
   const startTime = new Date();
   const dailyConfig = config.dailyScraping;
   const optimization = dailyConfig.optimization;
-  
+
   loggerService.log("🚀 Starting optimized comprehensive job scraping...");
   loggerService.log(`📅 Date: ${startTime.toLocaleDateString()}`);
   loggerService.log(`⏰ Time: ${startTime.toLocaleTimeString()}`);
-  loggerService.log(`⚡ Optimization: ${optimization.enabled ? 'Enabled' : 'Disabled'}`);
+  loggerService.log(
+    `⚡ Optimization: ${optimization.enabled ? "Enabled" : "Disabled"}`
+  );
 
   const channel = client.channels.cache.get(config.channelId);
-  
+
   // Send start notification
   if (channel) {
     await channel.send({
-      embeds: [{
-        title: "🤖 Optimized Comprehensive Job Scraping Started",
-        description: `Starting intelligent scraping of all job sources for ${startTime.toLocaleDateString()}`,
-        color: 0x00ff00,
-        fields: [
-          {
-            name: "📊 Sources",
-            value: "LinkedIn, GitHub, ZipRecruiter, JobRight",
-            inline: false
+      embeds: [
+        {
+          title: "🤖 Optimized Comprehensive Job Scraping Started",
+          description: `Starting intelligent scraping of all job sources for ${startTime.toLocaleDateString()}`,
+          color: 0x00ff00,
+          fields: [
+            {
+              name: "📊 Sources",
+              value: "LinkedIn, GitHub, ZipRecruiter, JobRight",
+              inline: false,
+            },
+            {
+              name: "🎯 Job Types",
+              value: "Internships & New Graduate/Entry Level",
+              inline: false,
+            },
+            {
+              name: "⚡ Optimization",
+              value: optimization.enabled ? "Enabled" : "Disabled",
+              inline: true,
+            },
+            {
+              name: "🔄 Parallel Processing",
+              value: optimization.parallelScraping ? "Enabled" : "Disabled",
+              inline: true,
+            },
+            {
+              name: "⏱️ Time Filter",
+              value: "Past 24 hours",
+              inline: true,
+            },
+          ],
+          footer: {
+            text: `Started at ${startTime.toLocaleString()}`,
           },
-          {
-            name: "🎯 Job Types",
-            value: "Internships & New Graduate/Entry Level",
-            inline: false
-          },
-          {
-            name: "⚡ Optimization",
-            value: optimization.enabled ? "Enabled" : "Disabled",
-            inline: true
-          },
-          {
-            name: "🔄 Parallel Processing",
-            value: optimization.parallelScraping ? "Enabled" : "Disabled",
-            inline: true
-          },
-          {
-            name: "⏱️ Time Filter",
-            value: "Past 24 hours",
-            inline: true
-          }
-        ],
-        footer: {
-          text: `Started at ${startTime.toLocaleString()}`
-        }
-      }]
+        },
+      ],
     });
   }
 
@@ -420,8 +519,8 @@ async function runComprehensiveScrape(client) {
       sourcesSkipped: 0,
       sourcesScraped: 0,
       existingJobsReused: 0,
-      newJobsFound: 0
-    }
+      newJobsFound: 0,
+    },
   };
 
   // Define scraping tasks with priority and daily limits - now including both roles
@@ -431,158 +530,164 @@ async function runComprehensiveScrape(client) {
       name: "LinkedIn (Internships)",
       priority: "high",
       role: "intern",
-      scraper: (client, role) => linkedinScraper.scrapeAllJobs(
-        config.linkedin.timeFilters.day,
-        client,
-        "comprehensive",
-        role
-      ),
-      jobLimit: dailyConfig.jobLimits.linkedin
+      scraper: (client, role) =>
+        linkedinScraper.scrapeAllJobs(
+          config.linkedin.timeFilters.day,
+          client,
+          "comprehensive",
+          role
+        ),
+      jobLimit: dailyConfig.jobLimits.linkedin,
     },
     {
       name: "GitHub (Internships)",
-      priority: "high", 
+      priority: "high",
       role: "intern",
-      scraper: (client, role) => githubScraper.scrapeAllJobs(
-        client,
-        "comprehensive",
-        role,
-        "day"
-      ),
-      jobLimit: dailyConfig.jobLimits.github
+      scraper: (client, role) =>
+        githubScraper.scrapeAllJobs(client, "comprehensive", role, "day"),
+      jobLimit: dailyConfig.jobLimits.github,
     },
-    
+
     // High Priority Sources - New Graduate/Entry Level
     {
       name: "LinkedIn (New Grad)",
       priority: "high",
       role: "new_grad",
-      scraper: (client, role) => linkedinScraper.scrapeAllJobs(
-        config.linkedin.timeFilters.day,
-        client,
-        "comprehensive",
-        role
-      ),
-      jobLimit: dailyConfig.jobLimits.linkedin
+      scraper: (client, role) =>
+        linkedinScraper.scrapeAllJobs(
+          config.linkedin.timeFilters.day,
+          client,
+          "comprehensive",
+          role
+        ),
+      jobLimit: dailyConfig.jobLimits.linkedin,
     },
     {
       name: "GitHub (New Grad)",
-      priority: "high", 
+      priority: "high",
       role: "new_grad",
-      scraper: (client, role) => githubScraper.scrapeAllJobs(
-        client,
-        "comprehensive",
-        role,
-        "day"
-      ),
-      jobLimit: dailyConfig.jobLimits.github
+      scraper: (client, role) =>
+        githubScraper.scrapeAllJobs(client, "comprehensive", role, "day"),
+      jobLimit: dailyConfig.jobLimits.github,
     },
-    
+
     // Medium Priority Sources - Internships
     {
-      name: "ZipRecruiter (Internships)", 
+      name: "ZipRecruiter (Internships)",
       priority: "medium",
       role: "intern",
-      scraper: (client, role) => ziprecruiterScraper.scrapeAllJobs(
-        config.ziprecruiter.timeFilters.day,
-        client,
-        "comprehensive",
-        role
-      ),
-      jobLimit: dailyConfig.jobLimits.ziprecruiter
+      scraper: (client, role) =>
+        ziprecruiterScraper.scrapeAllJobs(
+          config.ziprecruiter.timeFilters.day,
+          client,
+          "comprehensive",
+          role
+        ),
+      jobLimit: dailyConfig.jobLimits.ziprecruiter,
     },
-    
+
     // Medium Priority Sources - New Graduate/Entry Level
     {
-      name: "ZipRecruiter (New Grad)", 
+      name: "ZipRecruiter (New Grad)",
       priority: "medium",
       role: "new_grad",
-      scraper: (client, role) => ziprecruiterScraper.scrapeAllJobs(
-        config.ziprecruiter.timeFilters.day,
-        client,
-        "comprehensive",
-        role
-      ),
-      jobLimit: dailyConfig.jobLimits.ziprecruiter
+      scraper: (client, role) =>
+        ziprecruiterScraper.scrapeAllJobs(
+          config.ziprecruiter.timeFilters.day,
+          client,
+          "comprehensive",
+          role
+        ),
+      jobLimit: dailyConfig.jobLimits.ziprecruiter,
     },
-    
+
     // Low Priority Sources - Both roles (JobRight handles both internally)
     {
       name: "JobRight",
       priority: "low",
       role: "both",
-      scraper: (client, role) => jobrightScraper.scrapeAllJobs(
-        client,
-        "comprehensive",
-        role
-      ),
-      jobLimit: dailyConfig.jobLimits.jobright
-    }
+      scraper: (client, role) =>
+        jobrightScraper.scrapeAllJobs(client, "comprehensive", role),
+      jobLimit: dailyConfig.jobLimits.jobright,
+    },
   ];
 
   // Sort by priority
   const priorityOrder = { high: 1, medium: 2, low: 3 };
-  sourceTasks.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+  sourceTasks.sort(
+    (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]
+  );
 
-  loggerService.log(`📋 Running ${sourceTasks.length} sources with intelligent optimization...`);
+  loggerService.log(
+    `📋 Running ${sourceTasks.length} sources with intelligent optimization...`
+  );
 
   // Collect all jobs from all sources
   const allJobs = [];
 
   // Process by priority levels
   const priorityLevels = ["high", "medium", "low"];
-  
+
   for (const priority of priorityLevels) {
-    const priorityTasks = sourceTasks.filter(task => task.priority === priority);
-    
+    const priorityTasks = sourceTasks.filter(
+      (task) => task.priority === priority
+    );
+
     if (priorityTasks.length === 0) continue;
-    
-    loggerService.log(`🔥 Processing ${priorityTasks.length} ${priority}-priority sources...`);
-    
+
+    loggerService.log(
+      `🔥 Processing ${priorityTasks.length} ${priority}-priority sources...`
+    );
+
     // Run scrapers for this priority level
-    const priorityResults = await runParallelScraping(priorityTasks, priority, channel);
-    
+    const priorityResults = await runParallelScraping(
+      priorityTasks,
+      priority,
+      channel,
+      client
+    );
+
     // Process results
     for (const result of priorityResults) {
       if (result.skipped) {
-        results.skipped.push({ 
-          name: result.name, 
-          priority: result.priority, 
+        results.skipped.push({
+          name: result.name,
+          priority: result.priority,
           role: result.role,
           reason: result.reason,
-          jobsFound: result.jobsFound 
+          jobsFound: result.jobsFound,
         });
         results.optimizationStats.sourcesSkipped++;
         results.optimizationStats.existingJobsReused += result.jobsFound;
       } else if (result.jobsFound > 0) {
-        results.successful.push({ 
-          name: result.name, 
-          priority: result.priority, 
+        results.successful.push({
+          name: result.name,
+          priority: result.priority,
           role: result.role,
           jobsFound: result.jobsFound,
-          duration: result.duration 
+          duration: result.duration,
         });
         results.optimizationStats.sourcesScraped++;
         results.optimizationStats.newJobsFound += result.jobsFound;
       } else {
-        results.failed.push({ 
-          name: result.name, 
-          priority: result.priority, 
+        results.failed.push({
+          name: result.name,
+          priority: result.priority,
           role: result.role,
-          reason: result.reason 
+          reason: result.reason,
         });
       }
-      
+
       // Add source information to jobs
-      const jobsWithSource = result.jobs.map(job => ({
+      const jobsWithSource = result.jobs.map((job) => ({
         ...job,
         source: result.name.toLowerCase(),
-        role: result.role
+        role: job.role || result.role,
       }));
-      
+
       allJobs.push(...jobsWithSource);
     }
-    
+
     // Small delay between priority levels
     if (priority !== "low") {
       await delay(3000);
@@ -590,36 +695,49 @@ async function runComprehensiveScrape(client) {
   }
 
   // Process all collected jobs
-  loggerService.log(`📊 Processing ${allJobs.length} total jobs from all sources...`);
-  
+  loggerService.log(
+    `📊 Processing ${allJobs.length} total jobs from all sources...`
+  );
+
   // Filter for relevant jobs - now include both intern and new grad roles
   const relevantJobs = filterRelevantJobs(allJobs, "both");
   loggerService.log(`✅ Filtered to ${relevantJobs.length} relevant jobs`);
-  
+
   // Deduplicate jobs across all sources
   const uniqueJobs = deduplicateJobs(relevantJobs);
-  loggerService.log(`🎯 Found ${uniqueJobs.length} unique jobs after deduplication`);
-  
+  loggerService.log(
+    `🎯 Found ${uniqueJobs.length} unique jobs after deduplication`
+  );
+
   results.totalJobsFound = uniqueJobs.length;
 
   // Calculate final statistics
   const endTime = new Date();
   const duration = Math.round((endTime - startTime) / 1000);
   const stats = await mongoService.getAllCacheStats();
-  
+
   results.endTime = endTime;
   results.duration = duration;
 
-  loggerService.log(`🎉 Optimized comprehensive scraping completed in ${duration} seconds`);
-  loggerService.log(`📊 Results: ${results.successful.length} successful, ${results.failed.length} failed, ${results.skipped.length} skipped`);
+  loggerService.log(
+    `🎉 Optimized comprehensive scraping completed in ${duration} seconds`
+  );
+  loggerService.log(
+    `📊 Results: ${results.successful.length} successful, ${results.failed.length} failed, ${results.skipped.length} skipped`
+  );
   loggerService.log(`📈 Total unique jobs found: ${uniqueJobs.length}`);
-  loggerService.log(`⚡ Optimization: ${results.optimizationStats.sourcesSkipped} sources skipped, ${results.optimizationStats.existingJobsReused} existing jobs reused`);
+  loggerService.log(
+    `⚡ Optimization: ${results.optimizationStats.sourcesSkipped} sources skipped, ${results.optimizationStats.existingJobsReused} existing jobs reused`
+  );
 
   // Send final completion summary
   if (channel) {
     // Send final summary messages (may be multiple if too long)
-    const summaryMessages = createDailySummaryMessage(results, uniqueJobs.length);
-    
+    const summaryMessages = createDailySummaryMessage(
+      results,
+      uniqueJobs.length
+    );
+
     for (const summaryMessage of summaryMessages) {
       await channel.send(summaryMessage);
       await delay(1000); // Small delay between summary messages
@@ -628,12 +746,13 @@ async function runComprehensiveScrape(client) {
     // Send error details if any failures occurred
     if (results.failed.length > 0) {
       const errorDetails = results.failed
-        .map(f => `**${f.name}**: ${f.reason}`)
+        .map((f) => `**${f.name}**: ${f.reason}`)
         .join("\n");
 
       // Check if error details exceed Discord limit
       if (errorDetails.length > 1900) {
-        const truncatedError = errorDetails.substring(0, 1900) + "...\n*[Error details truncated]*";
+        const truncatedError =
+          errorDetails.substring(0, 1900) + "...\n*[Error details truncated]*";
         await channel.send(`❌ **Error Details:**\n${truncatedError}`);
       } else {
         await channel.send(`❌ **Error Details:**\n${errorDetails}`);

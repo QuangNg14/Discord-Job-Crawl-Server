@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay, filterRelevantJobs, filterJobsByDate } = require("../utils/helpers");
+const { delay, filterRelevantJobs, filterJobsByDate, sendJobsToDiscord } = require("../utils/helpers");
 
 /**
  * Scrape a GitHub repository for job listings
@@ -154,18 +154,21 @@ async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern"
   };
 
   try {
-    const channel = client?.channels?.cache?.get(config.channelId);
+    // Channel routing is now handled by sendJobsToDiscord
     
-    if (!channel && mode === "discord") {
-      logger.log("Discord channel not found!", "error");
+    if (!client && mode === "discord") {
+      logger.log("Discord client not found!", "error");
       return result;
     }
 
     const posts = await scrapeGithubRepo(repo, role, timeFilter);
     if (!posts || posts.length === 0) {
       logger.log(`No posts found in repo ${repo.name}`);
-      if (channel && mode === "discord") {
-        await channel.send(`No new posts found for ${repo.name}.`);
+      if (client && mode === "discord") {
+        const defaultChannel = client.channels.cache.get(config.channelId);
+        if (defaultChannel) {
+          await defaultChannel.send(`No new posts found for ${repo.name}.`);
+        }
       }
       result.success = true;
       return result;
@@ -178,8 +181,11 @@ async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern"
 
     if (newPosts.length === 0) {
       logger.log(`No new posts for ${repo.name}`);
-      if (channel && mode === "discord") {
-        await channel.send(`No new posts for ${repo.name}.`);
+      if (client && mode === "discord") {
+        const defaultChannel = client.channels.cache.get(config.channelId);
+        if (defaultChannel) {
+          await defaultChannel.send(`No new posts for ${repo.name}.`);
+        }
       }
       result.success = true;
       return result;
@@ -200,33 +206,9 @@ async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern"
     result.jobs = posts;
 
     // Only post to Discord if client is provided and mode is discord
-    if (channel && mode === "discord") {
-      await channel.send(
-        `${repo.name} (${postsToSend.length} new post${
-          postsToSend.length > 1 ? "s" : ""
-        }):`
-      );
-
-      for (const post of postsToSend) {
-        const embed = new EmbedBuilder()
-          .setTitle(post.title)
-          .setURL(post.url)
-          .setColor(config.github.embedColor)
-          .setDescription(post.description)
-          .addFields({ name: "Date", value: post.postedDate, inline: true })
-          .setFooter({
-            text: `Source: ${post.source} | ID: ${post.id.substring(0, 10)}`,
-          });
-
-        try {
-          await channel.send({ embeds: [embed] });
-        } catch (err) {
-          logger.log(`Error sending post: ${err.message}`, "error");
-          result.errorCount++;
-        }
-
-        await delay(1000);
-      }
+    if (client && mode === "discord" && postsToSend.length > 0) {
+      // Route jobs to appropriate channels
+      await sendJobsToDiscord(postsToSend, client, repo.name, role, delay);
     }
 
     result.success = true;
@@ -258,10 +240,13 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern", timeFilt
   logger.log("Starting GitHub scraping process");
 
   try {
-    const channel = client?.channels?.cache?.get(config.channelId);
+    // Channel routing is now handled by sendJobsToDiscord
     
-    if (channel && mode === "discord") {
-      await channel.send("GitHub - Internship Posts Update");
+    if (client && mode === "discord") {
+      const defaultChannel = client.channels.cache.get(config.channelId);
+      if (defaultChannel) {
+        await defaultChannel.send("GitHub - Internship Posts Update");
+      }
     }
 
     // Process each repo and collect results
@@ -276,10 +261,13 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern", timeFilt
       }
     }
 
-    if (channel && mode === "discord") {
-      await channel.send(
-        `GitHub scraping complete. Found ${lastRunStatus.jobsFound} new posts.`
-      );
+    if (client && mode === "discord") {
+      const defaultChannel = client.channels.cache.get(config.channelId);
+      if (defaultChannel) {
+        await defaultChannel.send(
+          `GitHub scraping complete. Found ${lastRunStatus.jobsFound} new posts.`
+        );
+      }
     }
     
     lastRunStatus.success = true;

@@ -1,8 +1,23 @@
 // Global configuration for the job scraping bot
 module.exports = {
   // Discord configuration
-  channelId: process.env.CHANNEL_ID,
+  channelId: process.env.CHANNEL_ID, // Legacy single channel (fallback)
   debugMode: false, // Disable debug mode for production efficiency
+  
+  // Multi-channel configuration for role + category routing
+  // Format: channels[role][category] = channelId
+  channels: {
+    intern: {
+      software_engineering: process.env.CHANNEL_ID_INTERN_SOFTWARE || process.env.CHANNEL_ID,
+      data_analysis: process.env.CHANNEL_ID_INTERN_DATA_ANALYSIS || process.env.CHANNEL_ID,
+      data_science_engineer: process.env.CHANNEL_ID_INTERN_DATA_SCIENCE || process.env.CHANNEL_ID,
+    },
+    new_grad: {
+      software_engineering: process.env.CHANNEL_ID_NEWGRAD_SOFTWARE || process.env.CHANNEL_ID,
+      data_analysis: process.env.CHANNEL_ID_NEWGRAD_DATA_ANALYSIS || process.env.CHANNEL_ID,
+      data_science_engineer: process.env.CHANNEL_ID_NEWGRAD_DATA_SCIENCE || process.env.CHANNEL_ID,
+    },
+  },
 
   // Main scraping schedule (for all job sources)
   scrapingSchedule: "0 14 * * *", // Daily at 2:00 PM EST (cron format)
@@ -188,15 +203,27 @@ module.exports = {
   jobFiltering: {
     // Core keywords that must be present in job titles (at least one)
     requiredKeywords: [
-      "software engineer",
-      "software developer", 
-      "software development",
-      "data engineer",
-      "data scientist",
-      "machine learning",
-      "ml engineer",
-      "ai engineer",
-      "artificial intelligence",
+      // Core software engineering
+      "software engineer", "software developer", "software development",
+      "frontend", "backend", "fullstack", "full-stack", "full stack",
+      "web developer", "web development", "mobile developer", "app developer",
+      "application developer", "systems engineer", "platform engineer",
+      
+      // Data engineering/science
+      "data engineer", "data scientist", "data analyst", "data analytics",
+      "machine learning", "ml engineer", "ai engineer", "artificial intelligence",
+      "analytics engineer", "business intelligence", "bi engineer",
+      
+      // Business analysis
+      "business analyst", "business analytics",
+      
+      // DevOps/Infrastructure
+      "devops", "site reliability", "sre", "infrastructure engineer",
+      "cloud engineer",
+      
+      // Intern/Entry level indicators
+      "intern", "internship", "co-op", "coop", "student", "new grad", 
+      "new graduate", "entry level", "entry-level", "junior", "recent graduate"
     ],
 
     // Keywords that exclude jobs (if present, job is rejected)
@@ -224,10 +251,16 @@ module.exports = {
       "manager", "director", "lead", "principal", "senior", "staff", "architect",
       "consultant", "advisor", "specialist", "coordinator", "assistant", "associate",
       "internship coordinator", "recruiter", "hr", "human resources", "marketing",
-      "sales", "business", "finance", "accounting", "legal", "compliance", "regulatory",
+      "sales", "finance", "accounting", "legal", "compliance", "regulatory",
       "product manager", "project manager", "program manager", "scrum master",
-      "agile coach", "business analyst", "data analyst", "financial analyst",
-      "operations analyst", "market analyst", "research analyst", "policy analyst",
+      "agile coach",
+      
+      // Specific non-data analysts
+      "financial analyst", "operations analyst", "market analyst", "research analyst", "policy analyst",
+      
+      // Non-tech roles
+      "customer service", "support", "help desk", "administrative", "clerical",
+      "receptionist", "secretary", "office", "administrator", "teacher", "nurse", "doctor"
     ],
 
     // Specific software/data role indicators (if present, job is accepted regardless)

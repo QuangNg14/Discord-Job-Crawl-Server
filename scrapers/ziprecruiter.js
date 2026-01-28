@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay, filterRelevantJobs, filterJobsByDate } = require("../utils/helpers");
+const { delay, filterRelevantJobs, filterJobsByDate, sendJobsToDiscord } = require("../utils/helpers");
 
 /**
  * Helper function to convert timeFilter to ZipRecruiter's "days" parameter
