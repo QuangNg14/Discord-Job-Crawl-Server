@@ -5,7 +5,7 @@ const config = require("../config");
 const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
-const { delay, filterRelevantJobs, filterJobsByDate, sendJobsToDiscord } = require("../utils/helpers");
+const { delay, filterJobsByDate, sendJobsToDiscord, generateJobId, normalizeJob } = require("../utils/helpers");
 
 /**
  * Helper function to convert timeFilter to ZipRecruiter's "days" parameter
@@ -17,6 +17,72 @@ function getZipDays(timeFilter) {
   if (timeFilter === config.ziprecruiter.timeFilters.week) return "5";
   if (timeFilter === config.ziprecruiter.timeFilters.month) return "30";
   return "1"; // Default to 1 day
+}
+
+/**
+ * Map ZipRecruiter time filter to filterJobsByDate label
+ * @param {string} timeFilter - Time filter value
+ * @returns {string} filterJobsByDate label
+ */
+function getDateFilterLabel(timeFilter) {
+  if (timeFilter === config.ziprecruiter.timeFilters.week) return "week";
+  if (timeFilter === config.ziprecruiter.timeFilters.month) return "month";
+  return "day";
+}
+
+/**
+ * ZipRecruiter-specific relevance filter for requested roles
+ * @param {object} job - Job object
+ * @param {string} role - Role type: "intern", "new_grad", or "both"
+ * @returns {boolean} Whether job should be included
+ */
+function isZipRecruiterRelevantJob(job, role = "both") {
+  const title = (job.title || "").toLowerCase();
+
+  const allowedKeywords = [
+    "software engineer",
+    "software developer",
+    "software engineering",
+    "data engineer",
+    "data science",
+    "data scientist",
+    "data analyst",
+    "business analyst",
+    "finance",
+    "financial analyst",
+    "machine learning",
+  ];
+
+  const hasAllowedKeyword = allowedKeywords.some((keyword) =>
+    title.includes(keyword)
+  );
+  if (!hasAllowedKeyword) {
+    return false;
+  }
+
+  const internKeywords = ["intern", "internship", "co-op", "coop", "student"];
+  const newGradKeywords = [
+    "new grad",
+    "new graduate",
+    "entry level",
+    "entry-level",
+    "junior",
+    "recent graduate",
+  ];
+
+  if (role === "intern") {
+    return internKeywords.some((keyword) => title.includes(keyword));
+  }
+
+  if (role === "new_grad") {
+    return newGradKeywords.some((keyword) => title.includes(keyword));
+  }
+
+  const matchesIntern = internKeywords.some((keyword) => title.includes(keyword));
+  const matchesNewGrad = newGradKeywords.some((keyword) =>
+    title.includes(keyword)
+  );
+  return matchesIntern || matchesNewGrad;
 }
 
 /**
@@ -153,11 +219,12 @@ async function scrapeZipRecruiter(searchUrl) {
               url = `https://www.ziprecruiter.com/jobs-search?search=${encodeURIComponent(title)}&refine_by_location_type=no_remote&radius=5000&days=1&refine_by_employment=employment_type%3Aall&refine_by_salary=&refine_by_salary_ceil=&lk=0aq8wal_FklwDhFiEGcMrw&page=1`;
             }
 
-            // Generate unique ID - improved for better uniqueness
-            const jobId = `ziprecruiter-${btoa(title + "_" + company + "_" + location).slice(0, 25)}`;
+            // Generate unique ID
+            const jobId = generateJobId({ title, company, location });
 
             results.push({
               id: jobId,
+              jobId: jobId,
               title: title,
               url: url,
               company: company || "Company not specified",
@@ -178,9 +245,12 @@ async function scrapeZipRecruiter(searchUrl) {
       return results;
     });
 
-    logger.log(`ZipRecruiter scraper found ${jobs.length} jobs.`);
+    // Process in Node context
+    const processedJobs = jobs.map(job => normalizeJob(job));
+
+    logger.log(`ZipRecruiter scraper found ${processedJobs.length} jobs.`);
     await browser.close();
-    return jobs;
+    return processedJobs;
   } catch (error) {
     logger.log(`Error scraping ZipRecruiter: ${error.message}`, "error");
     if (browser) await browser.close();
@@ -196,7 +266,7 @@ async function scrapeZipRecruiter(searchUrl) {
  * @param {string} role - Role type: "intern", "new_grad", or "both"
  * @returns {object} Object with jobs array and metadata
  */
-async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "both") {
   logger.log("Starting ZipRecruiter scraping process");
   
   const allJobs = [];
@@ -221,17 +291,22 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "inter
         const jobs = await scrapeZipRecruiter(searchUrl);
         
         if (jobs && jobs.length > 0) {
+          const limitedRawJobs = jobs.slice(0, maxJobsPerSearch);
+
           // Filter for relevant jobs
-          const relevantJobs = filterRelevantJobs(jobs, role);
+          const relevantJobs = limitedRawJobs.filter((job) =>
+            isZipRecruiterRelevantJob(job, role)
+          );
           logger.log(`Found ${relevantJobs.length} relevant jobs for ${keyword} in ${location} (role: ${role})`);
           
-          // Apply date filtering for daily scraping (only jobs from last day)
-          const recentJobs = filterJobsByDate(relevantJobs, "day");
-          logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last day for ${keyword} in ${location}`);
+          // Apply date filtering based on requested time filter
+          const dateFilterLabel = getDateFilterLabel(timeFilter);
+          const recentJobs = filterJobsByDate(relevantJobs, dateFilterLabel);
+          logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last ${dateFilterLabel} for ${keyword} in ${location}`);
           
           // Limit jobs per keyword-location combination
-          const limitedJobs = recentJobs.slice(0, jobsPerCombination);
-          allJobs.push(...limitedJobs);
+          const limitedCombinationJobs = recentJobs.slice(0, jobsPerCombination);
+          allJobs.push(...limitedCombinationJobs);
         }
         
         await delay(2000); // Delay between searches

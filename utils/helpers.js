@@ -24,7 +24,7 @@ function normalizeJob(job) {
     title: (job.title || "").toLowerCase().trim(),
     company: (job.company || "").toLowerCase().trim(),
     location: (job.location || "").toLowerCase().trim(),
-    normalizedId: generateJobId(job)
+    normalizedId: job.normalizedId || generateJobId(job),
   };
 }
 
@@ -359,9 +359,46 @@ function createSourceSummaryMessages(sourceName, jobs, metadata = {}) {
  * @param {object} metadata - Additional metadata (should include client and role)
  * @param {function} delay - Delay function for rate limiting
  */
+/**
+ * Get the Discord channel object for a given role and category
+ * @param {string} role - Role type: "intern" or "new_grad"
+ * @param {string} category - Job category
+ * @param {object} client - Discord client
+ * @returns {Promise<object|null>} Discord channel object or null if not found
+ */
+async function getChannel(role, category, client) {
+  if (!client) return null;
+  
+  const channelId = getChannelId(role, category, client);
+  if (!channelId) return null;
+  
+  // Try cache first
+  let channel = client.channels.cache.get(channelId);
+  
+  // If not in cache, try fetching (important for some environments)
+  if (!channel) {
+    try {
+      channel = await client.channels.fetch(channelId);
+    } catch (err) {
+      // loggerService.log(`⚠️ Could not fetch channel ${channelId}: ${err.message}`, "warn");
+    }
+  }
+  
+  return channel;
+}
+
+/**
+ * Send source summary messages to Discord with proper rate limiting and channel routing
+ * @param {object} channel - Discord channel object (legacy, will be overridden by routing)
+ * @param {string} sourceName - Name of the source
+ * @param {Array} jobs - Array of jobs from this source
+ * @param {object} metadata - Additional metadata (should include client and role)
+ * @param {function} delay - Delay function for rate limiting
+ */
 async function sendSourceSummaryToDiscord(channel, sourceName, jobs, metadata = {}, delay) {
   const client = metadata.client;
   const defaultRole = metadata.role || "intern";
+  const sourceLower = (sourceName || "").toLowerCase();
   
   if (!client) {
     loggerService.log(`⚠️ No Discord client provided for ${sourceName}, skipping Discord notification`, "warn");
@@ -369,16 +406,68 @@ async function sendSourceSummaryToDiscord(channel, sourceName, jobs, metadata = 
   }
   
   try {
-    // Route jobs to appropriate channels
+    // 1. ALWAYS send a summary to the LOG channel first
+    const logChannel = await getChannel("log", "main", client);
+    if (logChannel) {
+      const statusEmoji = metadata.error ? "❌" : (metadata.skipped ? "⏭️" : "✅");
+      const jobCount = jobs ? jobs.length : 0;
+      let logMsg = `${statusEmoji} **${sourceName}** run complete. Found **${jobCount}** jobs.`;
+      if (metadata.error) logMsg += `\nError: ${metadata.error}`;
+      if (metadata.skipped) logMsg += `\nReason: ${metadata.reason}`;
+      await logChannel.send(logMsg);
+    }
+
+    if (!jobs || jobs.length === 0) return;
+
+    if (sourceLower.includes("wellfound") && config.startupChannelId) {
+      let startupChannel = await getChannel("log", "main", client);
+      if (!startupChannel) {
+        startupChannel = client.channels.cache.get(config.startupChannelId);
+      }
+      if (!startupChannel) {
+        try {
+          startupChannel = await client.channels.fetch(config.startupChannelId);
+        } catch (err) {
+          loggerService.log(
+            `⚠️ Could not fetch startup channel ${config.startupChannelId}: ${err.message}`,
+            "warn"
+          );
+          return;
+        }
+      }
+
+      const messages = createSourceSummaryMessages(sourceName, jobs, metadata);
+      for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.length > 2000) {
+          const truncatedMessage =
+            message.substring(0, 1900) + "...\n*[Message truncated due to length]*";
+          await startupChannel.send(truncatedMessage);
+        } else {
+          await startupChannel.send(message);
+        }
+        if (i < messages.length - 1) {
+          await delay(1500);
+        }
+      }
+
+      loggerService.log(
+        `✅ Sent ${messages.length} WellFound summary messages to startup channel`
+      );
+      return;
+    }
+
+    // 2. Route summaries to appropriate category channels
     const routedJobs = routeJobsToChannels(jobs, defaultRole);
     
     // Send summary to each channel
     for (const [routeKey, channelJobs] of routedJobs.entries()) {
-      const [role, category] = routeKey.split('_');
-      const targetChannel = getChannel(role, category, client);
+      const [role, category] = routeKey.split("::");
+      
+      const targetChannel = await getChannel(role, category, client);
       
       if (!targetChannel) {
-        loggerService.log(`⚠️ Could not find channel for ${routeKey}, skipping ${channelJobs.length} jobs`, "warn");
+        loggerService.log(`⚠️ Could not find channel for ${routeKey}, skipping ${channelJobs.length} jobs summary`, "warn");
         continue;
       }
       
@@ -415,17 +504,6 @@ async function sendSourceSummaryToDiscord(channel, sourceName, jobs, metadata = 
     }
   } catch (error) {
     loggerService.log(`❌ Error sending ${sourceName} summary to Discord: ${error.message}`, "error");
-    
-    // Try to send a simplified error message to default channel
-    try {
-      const defaultChannel = channel || (client.channels.cache.get(config.channelId));
-      if (defaultChannel) {
-        const errorMessage = `❌ **${sourceName} Summary Error**\n\nFailed to send detailed summary: ${error.message.substring(0, 100)}...`;
-        await defaultChannel.send(errorMessage);
-      }
-    } catch (fallbackError) {
-      loggerService.log(`❌ Failed to send error message for ${sourceName}: ${fallbackError.message}`, "error");
-    }
   }
 }
 
@@ -484,7 +562,7 @@ function isRelevantJob(title, company, description, role = null) {
     "internship coordinator", "recruiter", "hr", "human resources", "marketing",
     "sales", "finance", "accounting", "legal", "compliance", "regulatory",
     "product manager", "project manager", "program manager", "scrum master",
-    "agile coach", "financial analyst", "operations analyst", "market analyst", "research analyst", "policy analyst",
+    "agile coach",
     
     // Non-tech roles (more restrictive)
     "customer service", "support", "help desk", "administrative", "clerical",
@@ -592,17 +670,25 @@ function isRelevantJob(title, company, description, role = null) {
  * Filter jobs based on relevance criteria
  * @param {Array} jobs - Array of job objects
  * @param {string} role - Role type filter
+ * @param {object} options - Optional filtering options
+ * @param {Array} options.skipSources - Sources to bypass relevance filtering
  * @returns {Array} Filtered jobs
  */
-function filterRelevantJobs(jobs, role = null) {
+function filterRelevantJobs(jobs, role = null, options = {}) {
   if (!Array.isArray(jobs)) {
     console.log("❌ Invalid jobs array provided to filterRelevantJobs");
     return [];
   }
 
+  const skipSources = Array.isArray(options.skipSources) ? options.skipSources : [];
+
   console.log(`🔍 Filtering ${jobs.length} jobs for role: ${role || "any"}`);
 
   const filteredJobs = jobs.filter(job => {
+    if (job?.source && skipSources.includes(job.source)) {
+      return true;
+    }
+
     return isRelevantJob(
       job.title,
       job.company,
@@ -642,6 +728,11 @@ function filterJobsByDate(jobs, timeFilter = "day") {
       break;
     case "month":
       cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
+      break;
+    case "three_months":
+    case "3_months":
+    case "quarter":
+      cutoffDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000); // 90 days ago
       break;
     default:
       // For "day" filter, we want jobs from today and yesterday
@@ -827,7 +918,10 @@ function getChannelId(role, category, client = null) {
   const normalizedRole = role === "new_grad" ? "new_grad" : "intern";
   
   // Get channel ID from config
-  const channelId = config.channels?.[normalizedRole]?.[category] || config.channelId;
+  const channelId =
+    role === "log"
+      ? config.logChannelId
+      : config.channels?.[normalizedRole]?.[category] || null;
   
   if (!channelId) {
     loggerService.log(`⚠️ No channel ID found for role: ${normalizedRole}, category: ${category}`, "warn");
@@ -893,7 +987,7 @@ function routeJobsToChannels(jobs, defaultRole = "intern") {
     const category = categorizeJob(job);
     
     // Create key for routing
-    const routeKey = `${role}_${category}`;
+    const routeKey = `${role}::${category}`;
     
     // Add job to appropriate route
     if (!routedJobs.has(routeKey)) {
@@ -931,13 +1025,61 @@ async function sendJobsToDiscord(jobs, client, sourceName, defaultRole = "intern
   if (!client || !jobs || jobs.length === 0) return;
   
   try {
+    const sourceLower = (sourceName || "").toLowerCase();
+    if (sourceLower.includes("wellfound") && config.startupChannelId) {
+      let startupChannel = client.channels.cache.get(config.startupChannelId);
+      if (!startupChannel) {
+        try {
+          startupChannel = await client.channels.fetch(config.startupChannelId);
+        } catch (err) {
+          loggerService.log(
+            `⚠️ Could not fetch startup channel ${config.startupChannelId}: ${err.message}`,
+            "warn"
+          );
+          return;
+        }
+      }
+
+      await startupChannel.send(
+        `**${sourceName}** - ${jobs.length} new startup job${jobs.length > 1 ? "s" : ""}`
+      );
+
+      const embedColor = getSourceEmbedColor(sourceName);
+      for (const job of jobs) {
+        if (!job.title || !job.url) continue;
+
+        const embed = new EmbedBuilder()
+          .setTitle(job.title)
+          .setURL(job.url)
+          .setColor(embedColor)
+          .setDescription(job.company || "Company not specified")
+          .addFields(
+            { name: "Location", value: job.location || "Not specified", inline: true },
+            { name: "Posted", value: job.postedDate || "Recent", inline: true }
+          )
+          .setFooter({
+            text: `Source: ${sourceName} | ID: ${job.id ? job.id.substring(0, 10) : "unknown"}`,
+          });
+
+        try {
+          await startupChannel.send({ embeds: [embed] });
+          await delay(1000);
+        } catch (err) {
+          loggerService.log(`Error sending startup job to Discord: ${err.message}`, "error");
+        }
+      }
+
+      return;
+    }
+
     // Route jobs to appropriate channels
     const routedJobs = routeJobsToChannels(jobs, defaultRole);
     const embedColor = getSourceEmbedColor(sourceName);
     
     // Send jobs to each channel
     for (const [routeKey, channelJobs] of routedJobs.entries()) {
-      const [role, category] = routeKey.split('_');
+      const [role, category] = routeKey.split("::");
+      
       const targetChannel = getChannel(role, category, client);
       
       if (!targetChannel) {

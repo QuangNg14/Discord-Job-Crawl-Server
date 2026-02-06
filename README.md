@@ -70,11 +70,21 @@ A comprehensive Discord bot that scrapes job listings from eight different sourc
    cp .env.example .env
    ```
 
-   - Open `.env` and fill in your Discord Bot Token and Channel ID
+   - Open `.env` and fill in your Discord Bot Token and Channel IDs
 
    ```
    DISCORD_TOKEN=your_discord_bot_token_here
-   CHANNEL_ID=your_discord_channel_id_here
+   CHANNEL_ID_LOG=your_main_log_channel_id_here
+   
+   # Multi-Channel Configuration for Role + Category Routing
+   CHANNEL_ID_INTERN_SOFTWARE=1447607827412680785
+   CHANNEL_ID_INTERN_DATA_ANALYSIS=1447607930068144251
+   CHANNEL_ID_INTERN_DATA_SCIENCE=1447608092505280595
+   
+   CHANNEL_ID_NEWGRAD_SOFTWARE=1447608191884988527
+   CHANNEL_ID_NEWGRAD_DATA_ANALYSIS=1447608266564571257
+   CHANNEL_ID_NEWGRAD_DATA_SCIENCE=1447608409330290878
+
    MONGO_URI=mongodb://username:password@localhost:27017
    DB_NAME=job_scraper_bot
    DEBUG_MODE=false

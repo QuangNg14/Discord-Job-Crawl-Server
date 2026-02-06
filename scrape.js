@@ -10,6 +10,7 @@ const {
   createDailySummaryMessage,
   createSourceSummaryMessages,
   sendSourceSummaryToDiscord,
+  sendJobsToDiscord,
   filterRelevantJobs,
   normalizeJob,
   generateJobId,
@@ -20,6 +21,7 @@ const linkedinScraper = require("./scrapers/linkedin");
 const ziprecruiterScraper = require("./scrapers/ziprecruiter");
 const jobrightScraper = require("./scrapers/jobright");
 const githubScraper = require("./scrapers/github");
+const wellfoundScraper = require("./scrapers/wellfound");
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,7 +35,8 @@ const availableScrapers = {
       linkedinScraper.scrapeAllJobs(
         config.linkedin.timeFilters.week,
         client,
-        "comprehensive"
+        "comprehensive",
+        "both"
       ),
   },
   ziprecruiter: {
@@ -42,17 +45,28 @@ const availableScrapers = {
       ziprecruiterScraper.scrapeAllJobs(
         config.ziprecruiter.timeFilters.day,
         client,
-        "comprehensive"
+        "comprehensive",
+        "both"
       ),
   },
   jobright: {
     name: "JobRight",
-    scraper: (client) => jobrightScraper.scrapeAllJobs(client, "comprehensive"),
+    scraper: (client) => jobrightScraper.scrapeAllJobs(client, "comprehensive", "both"),
   },
   github: {
     name: "GitHub",
     scraper: (client) =>
-      githubScraper.scrapeAllJobs(client, "comprehensive", "intern"),
+      githubScraper.scrapeAllJobs(client, "comprehensive", "both", "week"),
+  },
+  wellfound: {
+    name: "WellFound",
+    scraper: (client) =>
+      wellfoundScraper.scrapeAllJobs(
+        client,
+        "comprehensive",
+        "both",
+        config.wellfound?.timeFilters?.threeMonths || "three_months"
+      ),
   },
 };
 
@@ -124,10 +138,13 @@ async function collectJobsFromSource(
   channel,
   client,
   priority,
-  role = "both"
+  role = "both",
+  options = {}
 ) {
   const optimization = config.dailyScraping.optimization;
   const startTime = Date.now();
+  const dedupeContext = options.dedupeContext;
+  const discordSendQueue = options.discordSendQueue;
 
   try {
     loggerService.log(
@@ -197,26 +214,66 @@ async function collectJobsFromSource(
         } jobs from ${sourceName} (${role}) in ${Date.now() - startTime}ms`
       );
 
+      let jobsForProcessing = result.jobs || [];
+      const skipMongoDedupe = options?.skipMongoDedupe === true;
+      if (dedupeContext?.enabled && jobsForProcessing.length > 0) {
+        if (!skipMongoDedupe) {
+          jobsForProcessing =
+            await mongoService.filterNewJobsByNormalizedId(jobsForProcessing);
+        }
+
+        if (dedupeContext.seenNormalizedIds) {
+          const uniqueJobs = [];
+          for (const job of jobsForProcessing) {
+            const normalizedId = job.normalizedId || generateJobId(job);
+            if (!dedupeContext.seenNormalizedIds.has(normalizedId)) {
+              dedupeContext.seenNormalizedIds.add(normalizedId);
+              uniqueJobs.push({ ...job, normalizedId });
+            }
+          }
+          jobsForProcessing = uniqueJobs;
+        }
+      }
+
       // Send individual source summary to Discord
       if (client) {
-        await sendSourceSummaryToDiscord(
-          null,
-          sourceName,
-          result.jobs || [],
-          {
-            client: client,
-            jobsFound: result.jobsFound,
-            priority: priority,
-            role: role,
-            duration: Date.now() - startTime,
-          },
-          delay
-        );
+        const sendToDiscord = async () => {
+          await sendSourceSummaryToDiscord(
+            null,
+            sourceName,
+            jobsForProcessing,
+            {
+              client: client,
+              jobsFound: jobsForProcessing.length,
+              priority: priority,
+              role: role,
+              duration: Date.now() - startTime,
+            },
+            delay
+          );
+
+          // Also route individual job embeds to their respective channels
+          if (jobsForProcessing && jobsForProcessing.length > 0) {
+            await sendJobsToDiscord(
+              jobsForProcessing,
+              client,
+              sourceName,
+              role,
+              delay
+            );
+          }
+        };
+
+        if (discordSendQueue) {
+          await discordSendQueue(sendToDiscord);
+        } else {
+          await sendToDiscord();
+        }
       }
 
       return {
-        jobs: result.jobs || [],
-        jobsFound: result.jobsFound,
+        jobs: jobsForProcessing,
+        jobsFound: jobsForProcessing.length,
         skipped: false,
         reason: "Successfully scraped",
         duration: Date.now() - startTime,
@@ -295,8 +352,13 @@ async function collectJobsFromSource(
  * @param {object} client - Discord client for channel routing
  * @returns {Array} Array of results
  */
-async function runParallelScraping(tasks, priority, channel, client) {
+async function runParallelScraping(tasks, priority, channel, client, options = {}) {
   const optimization = config.dailyScraping.optimization;
+  const maxConcurrent =
+    optimization.maxConcurrentSources && optimization.maxConcurrentSources > 0
+      ? optimization.maxConcurrentSources
+      : tasks.length;
+  const staggerStartMs = optimization.staggerStartMs || 0;
 
   if (!optimization.parallelScraping) {
     // Sequential processing
@@ -308,7 +370,8 @@ async function runParallelScraping(tasks, priority, channel, client) {
         channel,
         client,
         priority,
-        task.role
+        task.role,
+        task.options || options
       );
       results.push({ ...result, name: task.name, priority, role: task.role });
       await delay(2000); // Delay between sources
@@ -321,19 +384,38 @@ async function runParallelScraping(tasks, priority, channel, client) {
     `🚀 Running ${tasks.length} ${priority}-priority sources in parallel...`
   );
 
-  const promises = tasks.map(async (task) => {
-    const result = await collectJobsFromSource(
-      task.scraper,
-      task.name,
-      channel,
-      client,
-      priority,
-      task.role
-    );
-    return { ...result, name: task.name, priority, role: task.role };
-  });
+  let runningIndex = 0;
+  const results = new Array(tasks.length);
 
-  const results = await Promise.all(promises);
+  const worker = async () => {
+    while (runningIndex < tasks.length) {
+      const index = runningIndex;
+      runningIndex += 1;
+      const task = tasks[index];
+
+      if (staggerStartMs > 0 && index > 0) {
+        await delay(staggerStartMs);
+      }
+
+      const result = await collectJobsFromSource(
+        task.scraper,
+        task.name,
+        channel,
+        client,
+        priority,
+        task.role,
+        task.options || options
+      );
+      results[index] = { ...result, name: task.name, priority, role: task.role };
+    }
+  };
+
+  const workers = Array.from(
+    { length: Math.min(maxConcurrent, tasks.length) },
+    () => worker()
+  );
+
+  await Promise.all(workers);
   loggerService.log(
     `✅ Completed parallel scraping for ${priority}-priority sources`
   );
@@ -357,7 +439,7 @@ async function runSpecificScraper(sourceName, client) {
 
   loggerService.log(`🚀 Starting ${scraper.name} job scraping...`);
 
-  const channel = client.channels.cache.get(config.channelId);
+  const channel = client.channels.cache.get(config.logChannelId);
   if (channel) {
     await channel.send(`🤖 Starting ${scraper.name} job scraping...`);
   }
@@ -389,6 +471,17 @@ async function runSpecificScraper(sourceName, client) {
         },
         delay
       );
+
+      // Also route individual job embeds to their respective channels
+      if (result.jobs.length > 0) {
+        await sendJobsToDiscord(
+          result.jobs,
+          client,
+          scraper.name,
+          "both",
+          delay
+        );
+      }
     } else if (channel) {
       // Fallback to old format if no jobs data
       const embed = {
@@ -462,11 +555,11 @@ async function runComprehensiveScrape(client) {
     `⚡ Optimization: ${optimization.enabled ? "Enabled" : "Disabled"}`
   );
 
-  const channel = client.channels.cache.get(config.channelId);
+  const logChannel = client.channels.cache.get(config.logChannelId);
 
   // Send start notification
-  if (channel) {
-    await channel.send({
+  if (logChannel) {
+    await logChannel.send({
       embeds: [
         {
           title: "🤖 Optimized Comprehensive Job Scraping Started",
@@ -522,6 +615,22 @@ async function runComprehensiveScrape(client) {
       newJobsFound: 0,
     },
   };
+
+  const discordSendQueue =
+    optimization.discordSequentialSend === false
+      ? null
+      : (() => {
+          let queue = Promise.resolve();
+          return (fn) => {
+            queue = queue.then(fn).catch((err) => {
+              loggerService.log(
+                `Discord send queue error: ${err.message}`,
+                "error"
+              );
+            });
+            return queue;
+          };
+        })();
 
   // Define scraping tasks with priority and daily limits - now including both roles
   const sourceTasks = [
@@ -608,7 +717,23 @@ async function runComprehensiveScrape(client) {
       role: "both",
       scraper: (client, role) =>
         jobrightScraper.scrapeAllJobs(client, "comprehensive", role),
+      options: {
+        skipMongoDedupe: true,
+      },
       jobLimit: dailyConfig.jobLimits.jobright,
+    },
+    {
+      name: "WellFound",
+      priority: "low",
+      role: "both",
+      scraper: (client, role) =>
+        wellfoundScraper.scrapeAllJobs(
+          client,
+          "comprehensive",
+          role,
+          config.wellfound?.timeFilters?.threeMonths || "three_months"
+        ),
+      jobLimit: dailyConfig.jobLimits.wellfound,
     },
   ];
 
@@ -624,6 +749,10 @@ async function runComprehensiveScrape(client) {
 
   // Collect all jobs from all sources
   const allJobs = [];
+  const dedupeContext = {
+    enabled: true,
+    seenNormalizedIds: new Set(),
+  };
 
   // Process by priority levels
   const priorityLevels = ["high", "medium", "low"];
@@ -643,8 +772,9 @@ async function runComprehensiveScrape(client) {
     const priorityResults = await runParallelScraping(
       priorityTasks,
       priority,
-      channel,
-      client
+      logChannel,
+      client,
+      { dedupeContext, discordSendQueue }
     );
 
     // Process results
@@ -700,7 +830,9 @@ async function runComprehensiveScrape(client) {
   );
 
   // Filter for relevant jobs - now include both intern and new grad roles
-  const relevantJobs = filterRelevantJobs(allJobs, "both");
+  const relevantJobs = filterRelevantJobs(allJobs, "both", {
+    skipSources: ["wellfound"],
+  });
   loggerService.log(`✅ Filtered to ${relevantJobs.length} relevant jobs`);
 
   // Deduplicate jobs across all sources
@@ -709,7 +841,14 @@ async function runComprehensiveScrape(client) {
     `🎯 Found ${uniqueJobs.length} unique jobs after deduplication`
   );
 
-  results.totalJobsFound = uniqueJobs.length;
+  const dailyUniqueJobs =
+    await mongoService.filterNewJobsByNormalizedId(uniqueJobs);
+  loggerService.log(
+    `🧹 Filtered to ${dailyUniqueJobs.length} new jobs after daily dedupe`
+  );
+
+  results.totalJobsFound = dailyUniqueJobs.length;
+  results.optimizationStats.newJobsFound = dailyUniqueJobs.length;
 
   // Calculate final statistics
   const endTime = new Date();
@@ -731,16 +870,23 @@ async function runComprehensiveScrape(client) {
   );
 
   // Send final completion summary
-  if (channel) {
-    // Send final summary messages (may be multiple if too long)
+  if (logChannel) {
+    // Send final summary messages
     const summaryMessages = createDailySummaryMessage(
       results,
-      uniqueJobs.length
+      results.highQualityJobsCount || dailyUniqueJobs.length
     );
 
     for (const summaryMessage of summaryMessages) {
-      await channel.send(summaryMessage);
-      await delay(1000); // Small delay between summary messages
+      await logChannel.send(summaryMessage);
+      await delay(1000);
+    }
+
+    // Send the top curated jobs to the log channel (as an overview)
+    const jobMessages = createDiscordJobMessages(dailyUniqueJobs);
+    for (const jobMsg of jobMessages) {
+      await logChannel.send(jobMsg);
+      await delay(1500);
     }
 
     // Send error details if any failures occurred
@@ -753,9 +899,9 @@ async function runComprehensiveScrape(client) {
       if (errorDetails.length > 1900) {
         const truncatedError =
           errorDetails.substring(0, 1900) + "...\n*[Error details truncated]*";
-        await channel.send(`❌ **Error Details:**\n${truncatedError}`);
+        await logChannel.send(`❌ **Error Details:**\n${truncatedError}`);
       } else {
-        await channel.send(`❌ **Error Details:**\n${errorDetails}`);
+        await logChannel.send(`❌ **Error Details:**\n${errorDetails}`);
       }
     }
   }

@@ -576,7 +576,7 @@ async function executeCommand(command, options, client) {
         }
 
         // Send summary message
-        const targetChannel = client.channels.cache.get(config.channelId);
+        const targetChannel = client.channels.cache.get(config.logChannelId);
         if (targetChannel) {
           const totalJobs = results.reduce(
             (sum, result) => sum + (result?.jobsFound || 0),
@@ -684,7 +684,7 @@ async function executeCommand(command, options, client) {
         // Import the daily scraper function
         const { runDailyComprehensiveScrape } = require("../daily-scraper");
         
-        const dailyChannel = client.channels.cache.get(config.channelId);
+        const dailyChannel = client.channels.cache.get(config.logChannelId);
         if (dailyChannel) {
           await dailyChannel.send("🚀 Starting daily comprehensive scraping of all sources...");
         }
@@ -744,7 +744,7 @@ async function executeCommand(command, options, client) {
         return resultGithubSpecific;
       case "jobsallsources":
         // Run all job board scrapers (excluding GitHub)
-        const channel = client.channels.cache.get(config.channelId);
+        const channel = client.channels.cache.get(config.logChannelId);
         if (channel) {
           await channel.send(
             "Starting job scraping from all job board sources..."
@@ -1200,7 +1200,7 @@ async function handleSlash(interaction, client) {
     const options = interaction.options;
 
     // Get role and time options if they exist
-    const role = options.getString("role") || "intern";
+    const role = options.getString("role") || "both";
     const time = options.getString("time") || "day";
 
     // Map slash commands to their corresponding legacy commands

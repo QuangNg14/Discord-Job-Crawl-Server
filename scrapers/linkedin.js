@@ -333,7 +333,7 @@ async function scrapeLinkedInWithRetry(searchUrl, maxJobs, retries = 3) {
  * @param {string} role - Role type: "intern" or "new grad"
  * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "both") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -346,9 +346,10 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "inter
 
   try {
     // Channel routing is now handled by sendJobsToDiscord
+    const logChannel = client ? client.channels.cache.get(config.logChannelId) : null;
     
-    if (channel && mode === "discord") {
-      await channel.send("LinkedIn Job Postings Update");
+    if (logChannel && mode === "discord") {
+      await logChannel.send("LinkedIn Job Postings Update");
     }
 
     // Process each keyword and location combination
@@ -463,7 +464,7 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "inter
             
             // If there are more jobs, mention it in the default channel
             if (newJobs.length > jobsToShow.length) {
-              const defaultChannel = client.channels.cache.get(config.channelId);
+              const defaultChannel = client.channels.cache.get(config.logChannelId);
               if (defaultChannel) {
                 await defaultChannel.send(
                   `... and ${
@@ -483,7 +484,7 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "inter
           );
           if (client && mode === "discord") {
             try {
-              const defaultChannel = client.channels.cache.get(config.channelId);
+              const defaultChannel = client.channels.cache.get(config.logChannelId);
               if (defaultChannel) {
                 await defaultChannel.send(
                   `Error scraping LinkedIn for ${keyword} in ${location} - ${error.message.substring(
@@ -506,7 +507,7 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "inter
     }
 
     if (client && mode === "discord") {
-      const defaultChannel = client.channels.cache.get(config.channelId);
+      const defaultChannel = client.channels.cache.get(config.logChannelId);
       if (defaultChannel) {
         await defaultChannel.send(
           `LinkedIn job scraping complete (${mode} mode). Found ${lastRunStatus.jobsFound} new jobs.`

@@ -38,7 +38,7 @@ client.once("ready", async () => {
 
   await mongoService.loadCache();
 
-  const channel = client.channels.cache.get(config.channelId);
+  const channel = client.channels.cache.get(config.logChannelId);
   if (channel) {
     await channel.send(
       "🤖 Job Scraping Bot is online! Use `/help` or `!help` to see commands."
@@ -52,7 +52,14 @@ registerSlashCommands();
 // Handle legacy commands
 client.on("messageCreate", (msg) => {
   if (!msg.content.startsWith("!") || msg.author.bot) return;
-  if (msg.channel.id !== config.channelId) return;
+  
+  // Check if message is in any allowed channel (log channel or job channels)
+  const isAllowedChannel = msg.channel.id === config.logChannelId || 
+    Object.values(config.channels.intern).includes(msg.channel.id) ||
+    Object.values(config.channels.new_grad).includes(msg.channel.id);
+    
+  if (!isAllowedChannel) return;
+  
   const [cmd, ...args] = msg.content.slice(1).split(/\s+/);
   commandHandler.processCommand(cmd, msg, client);
 });

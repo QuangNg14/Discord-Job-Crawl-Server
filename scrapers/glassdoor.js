@@ -327,9 +327,9 @@ async function scrapeMultipleUrls(urls, client, role = "intern") {
   };
 
   try {
-    const channel = client.channels.cache.get(config.channelId);
+    const channel = client.channels.cache.get(config.logChannelId);
     if (!channel) {
-      logger.log(`Channel with ID ${config.channelId} not found`, "error");
+      logger.log(`Channel with ID ${config.logChannelId} not found`, "error");
       return lastRunStatus;
     }
 
@@ -468,7 +468,7 @@ async function scrapeMultipleUrls(urls, client, role = "intern") {
  * @param {string} role - Role type: "intern" or "new grad"
  * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "both") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -480,7 +480,7 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "inter
   logger.log("Starting Glassdoor job scraping process");
 
   try {
-    const channel = client?.channels?.cache?.get(config.channelId);
+    const channel = client?.channels?.cache?.get(config.logChannelId);
     
     if (channel && mode === "discord") {
       await channel.send("Glassdoor Job Postings Update");

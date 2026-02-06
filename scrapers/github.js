@@ -41,49 +41,102 @@ async function scrapeGithubRepo(repo, role = "intern", timeFilter = "day") {
     await delay(3000);
 
     const posts = await page.evaluate((repoUrl) => {
-      // Select the table in the README's markdown-body
-      const table = document.querySelector(".markdown-body table");
-      if (!table) return [];
+      const results = [];
+      const markdownBody = document.querySelector(".markdown-body");
+      if (!markdownBody) return [];
 
-      // Get all rows and skip the header row
-      let rows = Array.from(table.querySelectorAll("tr")).slice(1);
+      // Define the sections we are interested in and their mapping to our categories
+      const targetSections = {
+        "software engineering": "software_engineering",
+        "product management": "product_management",
+        "data science": "data_science_engineer",
+        "ai & machine learning": "data_science_engineer",
+        "data analyst": "data_analysis",
+        "business analyst": "data_analysis"
+      };
 
-      // Limit to 1,000 rows
-      if (rows.length > 1000) {
-        rows = rows.slice(0, 1000);
-      }
+      // Find all h2 headers which define categories in Pitt CSC / PittCSC Pitt CSCPitt Pitt CSC repo
+      const headers = Array.from(markdownBody.querySelectorAll("h2"));
+      
+      for (const header of headers) {
+        const headerText = header.innerText.toLowerCase();
+        let category = null;
 
-      const posts = [];
-      rows.forEach((tr) => {
-        const cells = Array.from(tr.querySelectorAll("td"));
-        if (cells.length < 5) return; // Expect at least 5 cells
-
-        const companyAnchor = cells[0].querySelector("a");
-        const company = companyAnchor
-          ? companyAnchor.innerText.trim()
-          : cells[0].innerText.trim();
-        const role = cells[1].innerText.trim();
-        const location = cells[2].innerText.trim();
-        const linkAnchor = cells[3].querySelector("a");
-        const link = linkAnchor ? linkAnchor.href : "";
-        const datePosted = cells[4] ? cells[4].innerText.trim() : "";
-        
-        // Skip rows with missing essential data
-        if (!company || !role || !datePosted) {
-          return;
+        // Check if this header matches any of our target sections
+        for (const [key, val] of Object.entries(targetSections)) {
+          if (headerText.includes(key)) {
+            category = val;
+            break;
+          }
         }
 
-        posts.push({
-          repo: repoUrl,
-          company,
-          role,
-          location,
-          link,
-          date: datePosted,
-        });
-      });
+        if (!category) continue;
 
-      return posts;
+        // Find the next table after this header
+        let nextElement = header.nextElementSibling;
+        while (nextElement && nextElement.tagName !== "TABLE" && nextElement.tagName !== "H2") {
+          nextElement = nextElement.nextElementSibling;
+        }
+
+        if (nextElement && nextElement.tagName === "TABLE") {
+          const rows = Array.from(nextElement.querySelectorAll("tbody tr"));
+          
+          rows.forEach((tr) => {
+            const cells = Array.from(tr.querySelectorAll("td"));
+            if (cells.length < 5) return;
+
+            const companyAnchor = cells[0].querySelector("a");
+            const company = companyAnchor
+              ? companyAnchor.innerText.trim()
+              : cells[0].innerText.trim();
+            const role = cells[1].innerText.trim();
+            const location = cells[2].innerText.trim();
+            const linkAnchor = cells[3].querySelector("a");
+            const link = linkAnchor ? linkAnchor.href : "";
+            const datePosted = cells[4] ? cells[4].innerText.trim() : "";
+            
+            if (!company || !role || !datePosted) return;
+
+            results.push({
+              repo: repoUrl,
+              company,
+              role,
+              location,
+              link,
+              date: datePosted,
+              category // Store the category we found from the header
+            });
+          });
+        }
+      }
+
+      // Fallback: if no sections were matched (e.g. different repo format), just get the first table
+      if (results.length === 0) {
+        const table = document.querySelector(".markdown-body table");
+        if (table) {
+          const rows = Array.from(table.querySelectorAll("tbody tr"));
+          rows.forEach((tr) => {
+            const cells = Array.from(tr.querySelectorAll("td"));
+            if (cells.length >= 5) {
+              const company = cells[0].innerText.trim();
+              const role = cells[1].innerText.trim();
+              const datePosted = cells[4] ? cells[4].innerText.trim() : "";
+              if (company && role && datePosted) {
+                results.push({
+                  repo: repoUrl,
+                  company,
+                  role,
+                  location: cells[2].innerText.trim(),
+                  link: cells[3].querySelector("a")?.href || "",
+                  date: datePosted
+                });
+              }
+            }
+          });
+        }
+      }
+
+      return results;
     }, repo.url);
 
     logger.log(`Found ${posts.length} post(s) in repo ${repo.name}.`);
@@ -111,16 +164,24 @@ async function scrapeGithubRepo(repo, role = "intern", timeFilter = "day") {
         metadata: "",
         salary: "",
         workModel: "",
-        source: repo.name,
+        source: "github",
+        role: repo.type || role,
+        category: post.category || repo.category, // Use category from header or repo config
         repoUrl: repo.url,
       };
     });
 
-    // Skip relevance filtering for GitHub repositories - all jobs are already curated and relevant
-    // GitHub repositories contain pre-filtered, high-quality job listings
-    logger.log(`Skipping relevance filtering for GitHub repo ${repo.name} - all ${processedPosts.length} jobs are considered relevant`);
+    // Skip date filtering for curated Pitt CSC / PittCSC Pitt CSCPitt Pitt CSC repositories if requested
+    // Pitt CSC / PittCSC Pitt CSCPitt Pitt CSC repos are updated daily, so we want everything that's new to our database
+    const isCuratedRepo = repo.url.toLowerCase().includes("simplifyjobs") || 
+                         repo.url.toLowerCase().includes("jobright");
+    
+    if (isCuratedRepo) {
+      logger.log(`Skipping date filtering for curated repo ${repo.name} - collecting all jobs`);
+      return processedPosts;
+    }
 
-    // Apply date filtering based on the specified time filter
+    // Apply date filtering based on the specified time filter for other repos
     const recentJobs = filterJobsByDate(processedPosts, timeFilter);
     logger.log(`📅 Date filtering: ${recentJobs.length}/${processedPosts.length} jobs from last ${timeFilter}`);
 
@@ -165,7 +226,7 @@ async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern"
     if (!posts || posts.length === 0) {
       logger.log(`No posts found in repo ${repo.name}`);
       if (client && mode === "discord") {
-        const defaultChannel = client.channels.cache.get(config.channelId);
+        const defaultChannel = client.channels.cache.get(config.logChannelId);
         if (defaultChannel) {
           await defaultChannel.send(`No new posts found for ${repo.name}.`);
         }
@@ -182,7 +243,7 @@ async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern"
     if (newPosts.length === 0) {
       logger.log(`No new posts for ${repo.name}`);
       if (client && mode === "discord") {
-        const defaultChannel = client.channels.cache.get(config.channelId);
+        const defaultChannel = client.channels.cache.get(config.logChannelId);
         if (defaultChannel) {
           await defaultChannel.send(`No new posts for ${repo.name}.`);
         }
@@ -228,7 +289,7 @@ async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern"
  * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
  * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(client, mode = "discord", role = "intern", timeFilter = "day") {
+async function scrapeAllJobs(client, mode = "discord", role = "both", timeFilter = "day") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -243,7 +304,7 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern", timeFilt
     // Channel routing is now handled by sendJobsToDiscord
     
     if (client && mode === "discord") {
-      const defaultChannel = client.channels.cache.get(config.channelId);
+      const defaultChannel = client.channels.cache.get(config.logChannelId);
       if (defaultChannel) {
         await defaultChannel.send("GitHub - Internship Posts Update");
       }
@@ -262,7 +323,7 @@ async function scrapeAllJobs(client, mode = "discord", role = "intern", timeFilt
     }
 
     if (client && mode === "discord") {
-      const defaultChannel = client.channels.cache.get(config.channelId);
+      const defaultChannel = client.channels.cache.get(config.logChannelId);
       if (defaultChannel) {
         await defaultChannel.send(
           `GitHub scraping complete. Found ${lastRunStatus.jobsFound} new posts.`

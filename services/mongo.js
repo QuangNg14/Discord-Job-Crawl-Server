@@ -2,6 +2,7 @@ const { MongoClient } = require("mongodb");
 const fs = require("fs");
 const config = require("../config");
 const logger = require("./logger");
+const { generateJobId } = require("../utils/helpers");
 
 // MongoDB client
 let mongoClient;
@@ -15,6 +16,7 @@ const jobCaches = {
   ziprecruiter: new Set(),
   jobright: new Set(),
   github: new Set(),
+  wellfound: new Set(),
 };
 
 // Connect to MongoDB
@@ -72,12 +74,14 @@ async function connect() {
     );
     collections.jobright = db.collection(config.mongo.collections.jobright);
     collections.github = db.collection(config.mongo.collections.github);
+    collections.wellfound = db.collection(config.mongo.collections.wellfound);
 
     // Create indexes for faster lookups
     await collections.linkedin.createIndex({ jobId: 1 }, { unique: true });
     await collections.ziprecruiter.createIndex({ jobId: 1 }, { unique: true });
     await collections.jobright.createIndex({ jobId: 1 }, { unique: true });
     await collections.github.createIndex({ jobId: 1 }, { unique: true });
+    await collections.wellfound.createIndex({ jobId: 1 }, { unique: true });
 
     logger.log("Successfully connected to MongoDB");
     isConnected = true;
@@ -97,6 +101,7 @@ async function loadCache() {
     await loadSourceCache("ziprecruiter");
     await loadSourceCache("jobright");
     await loadSourceCache("github");
+    await loadSourceCache("wellfound");
   } catch (error) {
     logger.log(`Error loading job caches: ${error.message}`, "error");
   }
@@ -148,6 +153,8 @@ function getFileCachePath(source) {
       return config.jobright.fileCache;
     case "github":
       return config.github.fileCache;
+    case "wellfound":
+      return config.wellfound.fileCache;
 
     default:
       return `cache/${source}-job-cache.json`;
@@ -179,6 +186,59 @@ async function jobExistsByNormalizedId(normalizedId) {
   } catch (error) {
     logger.log(`Error checking normalized job ID: ${error.message}`, "error");
     return { exists: false, source: null, job: null };
+  }
+}
+
+// Filter out jobs that already exist by normalized ID (title + company + location)
+async function filterNewJobsByNormalizedId(jobs) {
+  try {
+    if (!jobs || jobs.length === 0) {
+      return [];
+    }
+
+    const normalizedJobs = jobs.map((job) => {
+      const normalizedId = job.normalizedId || generateJobId(job);
+      return { ...job, normalizedId };
+    });
+
+    if (!collections || Object.keys(collections).length === 0) {
+      return normalizedJobs;
+    }
+
+    const normalizedIds = [
+      ...new Set(
+        normalizedJobs
+          .map((job) => job.normalizedId)
+          .filter((id) => id && typeof id === "string")
+      ),
+    ];
+
+    if (normalizedIds.length === 0) {
+      return normalizedJobs;
+    }
+
+    const existingIds = new Set();
+    const chunkSize = 500;
+
+    for (let i = 0; i < normalizedIds.length; i += chunkSize) {
+      const chunk = normalizedIds.slice(i, i + chunkSize);
+      for (const collection of Object.values(collections)) {
+        if (!collection) continue;
+        const found = await collection
+          .find({ normalizedId: { $in: chunk } })
+          .project({ normalizedId: 1, _id: 0 })
+          .toArray();
+        found.forEach((doc) => existingIds.add(doc.normalizedId));
+      }
+    }
+
+    return normalizedJobs.filter((job) => !existingIds.has(job.normalizedId));
+  } catch (error) {
+    logger.log(
+      `Error filtering jobs by normalized ID: ${error.message}`,
+      "error"
+    );
+    return jobs;
   }
 }
 
@@ -270,10 +330,24 @@ async function addJobs(jobs, source) {
       return 0;
     }
 
-    logger.log(`Adding ${jobs.length} jobs to ${source} cache`);
+    const jobsWithNormalizedData = jobs.map((job) => {
+      const normalizedTitle = (job.title || "").toLowerCase().trim();
+      const normalizedCompany = (job.company || "").toLowerCase().trim();
+      const normalizedLocation = (job.location || "").toLowerCase().trim();
+      const normalizedId = job.normalizedId || generateJobId(job);
+      return {
+        ...job,
+        normalizedId,
+        normalizedTitle,
+        normalizedCompany,
+        normalizedLocation,
+      };
+    });
+
+    logger.log(`Adding ${jobsWithNormalizedData.length} jobs to ${source} cache`);
 
     // Extract job IDs
-    const jobIds = jobs.map((job) => job.id);
+    const jobIds = jobsWithNormalizedData.map((job) => job.id);
 
     // Always update in-memory cache
     jobIds.forEach((jobId) => jobCaches[source].add(jobId));
@@ -282,7 +356,7 @@ async function addJobs(jobs, source) {
 
     // If MongoDB is connected, store there
     if (collections[source]) {
-      const operations = jobs.map((job) => ({
+      const operations = jobsWithNormalizedData.map((job) => ({
         updateOne: {
           filter: { jobId: job.id },
           update: {
@@ -304,7 +378,10 @@ async function addJobs(jobs, source) {
               workModel: job.workModel || "",
               isPartnerListing: job.isPartnerListing || false,
               repoUrl: job.repoUrl || "",
+              normalizedId: job.normalizedId || "",
               normalizedTitle: job.normalizedTitle || "",
+              normalizedCompany: job.normalizedCompany || "",
+              normalizedLocation: job.normalizedLocation || "",
 
               // Additional metadata for better organization
               scrapedAt: new Date(),
@@ -393,6 +470,7 @@ async function clearAllCaches() {
   await clearCache("ziprecruiter");
   await clearCache("jobright");
   await clearCache("github");
+  await clearCache("wellfound");
 
   return true;
 }
@@ -447,18 +525,21 @@ async function getAllCacheStats() {
   const ziprecruiterStats = await getCacheStats("ziprecruiter");
   const jobrightStats = await getCacheStats("jobright");
   const githubStats = await getCacheStats("github");
+  const wellfoundStats = await getCacheStats("wellfound");
 
   return {
     linkedin: linkedinStats,
     ziprecruiter: ziprecruiterStats,
     jobright: jobrightStats,
     github: githubStats,
+    wellfound: wellfoundStats,
 
     total:
       linkedinStats.count +
       ziprecruiterStats.count +
       jobrightStats.count +
-      githubStats.count,
+      githubStats.count +
+      wellfoundStats.count,
   };
 }
 
@@ -550,6 +631,7 @@ module.exports = {
   loadCache,
   jobExists,
   jobExistsByNormalizedId,
+  filterNewJobsByNormalizedId,
   getRecentJobs,
   getAllRecentJobs,
   shouldSkipSource,

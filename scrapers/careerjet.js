@@ -283,7 +283,7 @@ async function scrapeCareerjet(searchUrl) {
  * @param {string} role - Role type: "intern" or "new grad"
  * @returns {object} Status object with jobs array
  */
-async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "intern") {
+async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "both") {
   const lastRunStatus = {
     lastRun: new Date(),
     success: false,
@@ -295,7 +295,7 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "inter
   logger.log("Starting CareerJet job scraping process");
 
   try {
-    const channel = client?.channels?.cache?.get(config.channelId);
+    const channel = client?.channels?.cache?.get(config.logChannelId);
     
     if (channel && mode === "discord") {
       await channel.send("CareerJet Job Postings Update");

@@ -15,6 +15,7 @@ async function getTopJobsFromAllSources(time = "day") {
       "glassdoor",
       "dice",
       "github",
+      "wellfound",
     ];
 
     for (const source of sources) {
