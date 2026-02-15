@@ -1,9 +1,17 @@
 // Global configuration for the job scraping bot
 module.exports = {
   // Discord configuration
-  logChannelId: process.env.CHANNEL_ID_LOG || process.env.CHANNEL_ID, // Channel for logs and summaries
+  // Set LOG_CHANNEL_ENABLED=false or 0 to turn off sending to the log channel
+  logChannelId:
+    process.env.LOG_CHANNEL_ENABLED === "false" || process.env.LOG_CHANNEL_ENABLED === "0"
+      ? null
+      : (process.env.CHANNEL_ID_LOG || process.env.CHANNEL_ID),
   startupChannelId: process.env.CHANNEL_ID_STARTUP, // Channel for startup jobs
   debugMode: false, // Disable debug mode for production efficiency
+  // Rate-limit-safe sending across 6 channels (3 intern + 3 new_grad)
+  discordSerialization: {
+    delayBetweenMessagesMs: 2000, // 2s between messages to stay under Discord limits
+  },
 
   // Multi-channel configuration for role + category routing
   // Format: channels[role][category] = channelId
@@ -47,14 +55,15 @@ module.exports = {
     priority: {
       high: ["linkedin", "github"], // Most important sources
       medium: ["ziprecruiter"], // Secondary sources
-      low: ["jobright", "wellfound"], // Additional sources
+      low: ["jobright"], // Additional sources
     },
     jobLimits: {
       linkedin: 150, // Higher limit for LinkedIn (most important) - increased for both roles
       github: 200, // Higher limit for GitHub repos - increased for both roles
       ziprecruiter: 80, // Reduced for efficiency - 8 keywords × 5 locations × 2 roles
       jobright: 100, // Increased for both roles
-      wellfound: 120, // Startup jobs across roles/locations
+      simplyhired: 80,
+      glassdoor: 80,
     },
     notifications: {
       start: true, // Notify when scraping starts
@@ -73,7 +82,8 @@ module.exports = {
       ziprecruiter: "ziprecruiter_jobs",
       jobright: "jobright_jobs",
       github: "github_jobs",
-      wellfound: "wellfound_jobs",
+      simplyhired: "simplyhired_jobs",
+      glassdoor: "glassdoor_jobs",
     },
     maxCacheSize: 5000, // Maximum number of jobs to keep in cache per source - increased for comprehensive scraping
     // Connection settings
@@ -446,7 +456,9 @@ module.exports = {
       "data scientist new grad",
       "data scientist entry level",
       "data analyst new grad",
+      "data analyst entry level",
       "business analyst new grad",
+      "business analyst entry level",
       "machine learning engineer new grad",
       "machine learning engineer entry level",
       "ml engineer new grad",
@@ -467,6 +479,7 @@ module.exports = {
     // Time filter configurations
     timeFilters: {
       day: "r86400", // Past 24 hours
+      threeDays: "r259200", // Past 3 days (3 * 24 * 3600)
       week: "r604800", // Past week
       month: "r2592000", // Past month
     },
@@ -475,12 +488,14 @@ module.exports = {
       // Discord mode limits (5-10 jobs for quick Discord responses)
       discord: {
         day: 7,
+        threeDays: 10,
         week: 10,
         month: 8,
       },
       // Comprehensive mode limits (thorough scraping)
       comprehensive: {
         default: 50,
+        threeDays: 50,
         week: 75, // Higher limit for comprehensive weekly scraping
       },
     },
@@ -490,57 +505,33 @@ module.exports = {
 
   // ZipRecruiter scraper configuration
   ziprecruiter: {
+    // Main job types only (software engineer/developer, data engineer, data analyst, business analyst) to stay under ~10 min
     jobKeywords: [
-      // Internship keywords
+      "software engineer",
+      "software developer",
+      "data engineer",
+      "data analyst",
+      "business analyst",
       "software engineer intern",
-      "software engineering intern",
-      "data engineer intern",
-      "data scientist intern",
-      "data science intern",
       "data analyst intern",
-      "business analyst intern",
-      "finance intern",
-      "financial analyst intern",
-      "machine learning intern",
-      // New grad / entry level keywords
-      "software engineer new grad",
-      "software engineer entry level",
-      "data engineer new grad",
-      "data scientist new grad",
-      "data analyst new grad",
-      "business analyst new grad",
-      "finance new grad",
-      "financial analyst new grad",
-      "machine learning engineer new grad",
     ],
-    // Popular cities for job searches
+    // Main locations only to keep runtime under 10 minutes
     jobLocations: [
-      "Los Angeles, CA",
-      "Sacramento, CA",
-      "San Francisco, CA",
-      "Denver, CO",
-      "Tampa, FL",
-      "Chicago, IL",
-      "Boston, MA",
-      "Minneapolis, MN",
-      "Kansas City, MO",
       "New York, NY",
-      "Charlotte, NC",
-      "Raleigh, NC",
-      "Pittsburgh, PA",
-      "Nashville, TN",
-      "Austin, TX",
-      "Richmond, VA",
+      "San Francisco, CA",
       "Seattle, WA",
-      "Columbus, OH",
-      "Memphis, TN",
-      "Grand Rapids, MI",
+      "Austin, TX",
+      "Boston, MA",
+      "Chicago, IL",
+      "Los Angeles, CA",
+      "Denver, CO",
     ],
-    maxJobsPerSearch: 5, // Reduced since we're searching multiple locations
+    maxJobsPerSearch: 5,
     fileCache: "cache/ziprecruiter-job-cache.json",
     embedColor: "#1e90ff",
     timeFilters: {
       day: "1",
+      threeDays: "3",
       week: "5",
       month: "30",
     },
@@ -637,49 +628,32 @@ module.exports = {
     embedColor: "#1e90ff",
   },
 
-  // WellFound (AngelList) scraper configuration
-  wellfound: {
-    roles: [
-      { name: "Software Engineer", slug: "software-engineer" },
-      { name: "Artificial Intelligence Engineer (AI)", slug: "artificial-intelligence-engineer" },
-      { name: "Machine Learning Engineer", slug: "machine-learning-engineer" },
-      { name: "Product Manager", slug: "product-manager" },
-      { name: "Backend Engineer", slug: "backend-engineer" },
-      { name: "Mobile Engineer", slug: "mobile-engineer" },
-      { name: "Frontend Engineer", slug: "frontend-engineer" },
-      { name: "Full Stack Engineer", slug: "full-stack-engineer" },
-      { name: "Data Scientist", slug: "data-scientist" },
-      { name: "Software Architect", slug: "software-architect" },
-      { name: "Devops Engineer", slug: "devops-engineer" },
+  // SimplyHired scraper configuration
+  simplyhired: {
+    jobKeywords: [
+      "software engineer",
+      "data analyst",
+      "data scientist",
+      "software developer",
     ],
-    excludedRoleKeywords: [
-      "engineering manager",
-      "product designer",
-      "designer",
-    ],
-    locations: [
-      { name: "New York", slug: "new-york" },
-      { name: "San Francisco", slug: "san-francisco" },
-      { name: "Los Angeles", slug: "los-angeles" },
-      { name: "Remote", slug: "remote" },
-      { name: "Austin", slug: "austin" },
-      { name: "Seattle", slug: "seattle" },
-      { name: "Boston", slug: "boston" },
-      { name: "Chicago", slug: "chicago" },
-      { name: "Denver", slug: "denver" },
-      { name: "District of Columbia", slug: "district-of-columbia" },
-    ],
-    maxPagesPerRoleLocation: 5,
-    fileCache: "cache/wellfound-job-cache.json",
+    jobLocations: ["United States", "Remote"],
+    timeFilters: { day: "1", week: "7", month: "30" },
+    jobLimits: { discord: 15, comprehensive: 80 },
     embedColor: "#1e90ff",
-    timeFilters: {
-      month: "month",
-      threeMonths: "three_months",
+  },
+
+  // Glassdoor scraper configuration
+  glassdoor: {
+    jobKeywords: ["software engineer", "data analyst", "developer"],
+    jobLocations: ["United States"],
+    searchUrls: {
+      day: "https://www.glassdoor.com/Job/us-software-engineer-jobs-SRCH_IL.0,2_IN1_KO3,20.htm",
+      week: "https://www.glassdoor.com/Job/us-software-engineer-jobs-SRCH_IL.0,2_IN1_KO3,20.htm",
+      month: "https://www.glassdoor.com/Job/us-software-engineer-jobs-SRCH_IL.0,2_IN1_KO3,20.htm",
     },
-    jobLimits: {
-      discord: 20,
-      comprehensive: 200,
-    },
+    jobLimits: { discord: 15, comprehensive: 80 },
+    maxJobsToPost: 10,
+    embedColor: "#0da944",
   },
 
   // Enhanced scraping targets - sites known for blocking bots

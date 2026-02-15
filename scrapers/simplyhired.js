@@ -6,6 +6,7 @@ const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
 const { delay, filterRelevantJobs } = require("../utils/helpers");
+const { getPuppeteerLaunchOptions } = require("../utils/puppeteerLaunch");
 
 /**
  * SimplyHired scraper function using Puppeteer
@@ -16,10 +17,9 @@ async function scrapeSimplyHired(searchUrl) {
   logger.log(`Scraping SimplyHired: ${searchUrl}`);
   let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: "new", // modern headless
-      args: ["--no-sandbox"],
-    });
+    browser = await puppeteer.launch(
+      getPuppeteerLaunchOptions({ headless: "new", args: ["--no-sandbox"] })
+    );
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent(
@@ -33,15 +33,17 @@ async function scrapeSimplyHired(searchUrl) {
     });
     await delay(5000);
 
-    // Wait for job content to load - try multiple selectors
+    // Wait for job content to load - try multiple selectors (data-cy may be absent after site changes)
     const selectors = [
+      "[data-cy='card']",
       "div.chakra-stack.css-1igwmid",
       ".job-card",
       "[data-testid='job-card']",
+      "article[class*='job'], article[class*='card']",
       ".search-result",
       "article",
       "[class*='job']",
-      "[class*='card']"
+      "[class*='card']",
     ];
 
     let foundSelector = false;
@@ -57,7 +59,7 @@ async function scrapeSimplyHired(searchUrl) {
     }
 
     if (!foundSelector) {
-      logger.log("No job selectors found, trying to find any content...");
+      logger.log("No job selectors found, trying to find any content...", "warn");
       await page.waitForSelector("body", { timeout: 10000 });
     }
 
@@ -78,11 +80,10 @@ async function scrapeSimplyHired(searchUrl) {
         return hash.toString(16);
       }
 
-      // Try multiple strategies to find job cards
+      // Try multiple strategies to find job cards (data-cy can change when site updates)
       const strategies = [
-        // Strategy 1: Look for chakra-stack elements
+        () => Array.from(document.querySelectorAll("[data-cy='card']")),
         () => Array.from(document.querySelectorAll("div.chakra-stack.css-1igwmid")),
-        // Strategy 2: Look for any elements with job-related classes
         () => Array.from(document.querySelectorAll("[class*='job'], [class*='card'], [class*='result']")),
         // Strategy 3: Look for any clickable elements with substantial text
         () => Array.from(document.querySelectorAll("a, div, article")).filter(el => 

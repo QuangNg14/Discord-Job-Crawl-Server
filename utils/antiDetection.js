@@ -56,8 +56,6 @@ const RATE_LIMITS = {
   "indeed.com": { minDelay: 2000, maxDelay: 5000, requestsPerMinute: 20 },
   "ziprecruiter.com": { minDelay: 1500, maxDelay: 4000, requestsPerMinute: 25 },
   "simplyhired.com": { minDelay: 1000, maxDelay: 3000, requestsPerMinute: 30 },
-  "careerjet.com": { minDelay: 1000, maxDelay: 3000, requestsPerMinute: 30 },
-  "dice.com": { minDelay: 2000, maxDelay: 5000, requestsPerMinute: 20 },
   "jobright.ai": { minDelay: 1500, maxDelay: 4000, requestsPerMinute: 25 },
 
   "github.com": { minDelay: 1000, maxDelay: 2000, requestsPerMinute: 60 },

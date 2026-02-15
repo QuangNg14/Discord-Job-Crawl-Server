@@ -4,9 +4,10 @@ const loggerService = require("../services/logger");
 const config = require("../config");
 
 /**
- * Generate a unique job ID based on job data
- * @param {object} job - Job object
- * @returns {string} Unique job ID
+ * Generate a unique job ID based on job data.
+ * Two jobs are considered duplicates if they have the same company, same role title, and same location.
+ * @param {object} job - Job object (title, company, location)
+ * @returns {string} Unique job ID (MD5 of normalized title-company-location)
  */
 function generateJobId(job) {
   const jobData = `${job.title || ""}-${job.company || ""}-${job.location || ""}`;
@@ -419,44 +420,6 @@ async function sendSourceSummaryToDiscord(channel, sourceName, jobs, metadata = 
 
     if (!jobs || jobs.length === 0) return;
 
-    if (sourceLower.includes("wellfound") && config.startupChannelId) {
-      let startupChannel = await getChannel("log", "main", client);
-      if (!startupChannel) {
-        startupChannel = client.channels.cache.get(config.startupChannelId);
-      }
-      if (!startupChannel) {
-        try {
-          startupChannel = await client.channels.fetch(config.startupChannelId);
-        } catch (err) {
-          loggerService.log(
-            `⚠️ Could not fetch startup channel ${config.startupChannelId}: ${err.message}`,
-            "warn"
-          );
-          return;
-        }
-      }
-
-      const messages = createSourceSummaryMessages(sourceName, jobs, metadata);
-      for (let i = 0; i < messages.length; i++) {
-        const message = messages[i];
-        if (message.length > 2000) {
-          const truncatedMessage =
-            message.substring(0, 1900) + "...\n*[Message truncated due to length]*";
-          await startupChannel.send(truncatedMessage);
-        } else {
-          await startupChannel.send(message);
-        }
-        if (i < messages.length - 1) {
-          await delay(1500);
-        }
-      }
-
-      loggerService.log(
-        `✅ Sent ${messages.length} WellFound summary messages to startup channel`
-      );
-      return;
-    }
-
     // 2. Route summaries to appropriate category channels
     const routedJobs = routeJobsToChannels(jobs, defaultRole);
     
@@ -525,71 +488,67 @@ function isRelevantJob(title, company, description, role = null) {
   const companyLower = (company || "").toLowerCase();
   const descriptionLower = (description || "").toLowerCase();
 
-  // Skip jobs with "Company not specified" or "Location not specified"
-  // But be more lenient for JobRight jobs since they come from curated repositories
-  if (companyLower.includes("company not specified") || 
-      companyLower.includes("location not specified") ||
-      companyLower.includes("unknown company")) {
-    console.log(`❌ Job filtered out (invalid company/location): "${title}"`);
+  // Skip only known aggregator/spam companies; allow "Unknown Company" / "Company not specified"
+  // so scrapers (e.g. SimplyHired) that miss company/location still keep title-relevant jobs
+  const excludedCompanies = ["jobright", "indeed", "ziprecruiter", "simplyhired", "glassdoor"];
+  if (excludedCompanies.some((c) => companyLower.includes(c))) {
+    console.log(`❌ Job filtered out (aggregator company): "${title}"`);
     return false;
   }
 
-  // Exclude non-software/data engineering roles
-  // Be more lenient for JobRight jobs since they come from curated repositories
-  const excludedKeywords = [
-    // Non-software engineering roles (more restrictive)
+  // --- EXCLUDED KEYWORDS: only match against title (not description to avoid false positives) ---
+  // Use word-boundary-aware matching for short keywords to prevent substring false positives
+  const excludedExactTitle = [
+    // Non-software engineering disciplines
     "geotechnical", "civil", "mechanical", "electrical", "chemical", "biomedical",
-    "environmental", "aerospace", "nuclear", "petroleum", "mining", "construction",
-    "hvac", "plumbing", "welding", "manufacturing", "production", "assembly",
-    "field service", "field engineer", "field technician", "maintenance", "repair",
-    "quality assurance engineer", "qa engineer", "test engineer", "validation engineer",
+    "environmental", "nuclear", "petroleum", "mining", "construction",
+    "hvac", "plumbing", "welding",
+    "field service", "field engineer", "field technician",
     "process engineer", "project engineer", "design engineer", "sales engineer",
-    "application engineer", "field application", "technical support engineer",
-    "hardware engineer", "firmware engineer", "embedded engineer", "rf engineer",
-    "analog engineer", "digital design engineer", "circuit", "pcb", "asic", "fpga",
-    "water resources", "structural", "transportation", "urban planning", "surveying",
+    "technical support engineer", "field application",
+    "hardware engineer", "firmware engineer", "rf engineer",
+    "analog engineer", "digital design engineer",
+    "water resources", "structural", "urban planning", "surveying",
     "materials engineer", "metallurgical", "ceramic", "polymer", "textile",
     "food engineer", "agricultural", "forest engineer", "packaging engineer",
-    "safety engineer", "compliance engineer", "regulatory engineer", "clinical engineer",
-    "bioprocess", "pharmaceutical", "medical device", "laboratory", "research engineer",
-    "operations engineer", "facility engineer", "building engineer", "energy engineer",
-    "power engineer", "control engineer", "instrumentation", "automation engineer",
+    "safety engineer", "regulatory engineer", "clinical engineer",
+    "bioprocess", "pharmaceutical", "medical device", "laboratory",
+    "research engineer", "operations engineer", "facility engineer",
+    "building engineer", "energy engineer", "power engineer",
+    "control engineer", "instrumentation", "automation engineer",
     "industrial engineer", "logistics engineer", "supply chain engineer",
-    
-    // Non-engineering roles (less restrictive for JobRight)
-    "manager", "director", "lead", "principal", "senior", "staff", "architect",
-    "consultant", "advisor", "specialist", "coordinator", "assistant", "associate",
-    "internship coordinator", "recruiter", "hr", "human resources", "marketing",
-    "sales", "finance", "accounting", "legal", "compliance", "regulatory",
+
+    // Seniority / management (too senior for intern/new grad)
+    "manager", "director", "principal", "senior", "staff",
+    "consultant", "advisor",
     "product manager", "project manager", "program manager", "scrum master",
-    "agile coach",
-    
-    // Non-tech roles (more restrictive)
-    "customer service", "support", "help desk", "administrative", "clerical",
-    "receptionist", "secretary", "office", "administrator", "coordinator",
-    "teacher", "instructor", "professor", "educator", "tutor", "trainer",
-    "writer", "editor", "content", "journalist", "reporter", "author",
-    "designer", "artist", "creative", "graphic", "visual", "ui/ux",
-    "nurse", "doctor", "physician", "medical", "healthcare", "clinical",
-    "lawyer", "attorney", "legal", "paralegal", "law",
-    "accountant", "bookkeeper", "finance", "banking", "investment",
-    "chef", "cook", "food", "restaurant", "hospitality", "hotel",
-    "driver", "delivery", "logistics", "warehouse", "inventory",
-    "retail", "cashier", "sales associate", "store", "shop"
+    "agile coach", "internship coordinator",
+
+    // Non-tech roles
+    "customer service", "help desk", "administrative", "clerical",
+    "receptionist", "secretary",
+    "teacher", "instructor", "professor", "educator",
+    "writer", "editor", "journalist", "reporter",
+    "nurse", "doctor", "physician", "healthcare",
+    "lawyer", "attorney", "paralegal",
+    "accountant", "bookkeeper",
+    "chef", "cook", "restaurant", "hospitality", "hotel",
+    "driver", "delivery", "warehouse", "inventory",
+    "retail", "cashier", "store", "shop",
   ];
 
-  // Check for excluded keywords
-  for (const keyword of excludedKeywords) {
-    if (titleLower.includes(keyword) || companyLower.includes(keyword) || descriptionLower.includes(keyword)) {
+  for (const keyword of excludedExactTitle) {
+    if (titleLower.includes(keyword)) {
       console.log(`❌ Job filtered out (excluded keyword "${keyword}"): "${title}"`);
       return false;
     }
   }
 
-  // Required software/data engineering keywords (at least one must be present)
+  // --- REQUIRED KEYWORDS: at least one must be present in title ---
   const requiredKeywords = [
     // Core software engineering
     "software engineer", "software developer", "software development",
+    "swe", "sde",
     "frontend", "backend", "fullstack", "full-stack", "full stack",
     "web developer", "web development", "mobile developer", "app developer",
     "application developer", "systems engineer", "platform engineer",
@@ -599,33 +558,26 @@ function isRelevantJob(title, company, description, role = null) {
     "machine learning", "ml engineer", "ai engineer", "artificial intelligence",
     "analytics engineer", "business intelligence", "bi engineer",
     
-    // Business analysis (for JobRight repositories)
-    "business analyst", "business analytics", "business intelligence",
+    // Business analysis
+    "business analyst", "business analytics",
     
     // DevOps/Infrastructure
     "devops", "site reliability", "sre", "infrastructure engineer",
-    "cloud engineer", "platform engineer", "systems administrator",
-    
-    // Specific technologies
-    "react", "node", "python", "java", "javascript", "typescript", 
-    "c++", "c#", "golang", "rust", "kotlin", "swift", "php", "ruby", "scala",
-    "database", "sql", "nosql", "mongodb", "postgresql", "mysql",
-    "api", "microservices", "kubernetes", "docker", "aws", "azure", "gcp",
+    "cloud engineer",
     
     // Cybersecurity
     "cybersecurity", "security engineer", "information security",
     
     // Emerging tech
-    "blockchain", "crypto", "fintech", "quantitative", "algorithm",
+    "blockchain", "fintech", "quantitative", "algorithm",
     
-    // Intern/Entry level indicators
-    "intern", "internship", "co-op", "coop", "student", "new grad", 
-    "new graduate", "entry level", "entry-level", "junior", "recent graduate"
+    // Entry level indicators (these count as required keywords too)
+    "software", "developer", "engineer", "programmer", "coding",
+    "data", "analyst",
   ];
 
-  // Check if any required keyword is present
   const hasRequiredKeyword = requiredKeywords.some(keyword => 
-    titleLower.includes(keyword) || companyLower.includes(keyword) || descriptionLower.includes(keyword)
+    titleLower.includes(keyword)
   );
 
   if (!hasRequiredKeyword) {
@@ -633,30 +585,62 @@ function isRelevantJob(title, company, description, role = null) {
     return false;
   }
 
-  // Role-specific filtering
+  // --- ROLE-SPECIFIC FILTERING ---
+  const internKeywords = ["intern", "internship", "co-op", "coop", "student"];
+  
+  // Comprehensive new grad / entry-level detection patterns
+  const newGradKeywords = [
+    "new grad", "new graduate", "entry level", "entry-level",
+    "junior", "recent graduate", "early career",
+    "university grad", "university graduate", "college grad", "college graduate",
+    "new college grad", "new college graduate",
+    // Roman numeral / number level indicators (I, 1, 0)
+    "engineer i", "engineer 1", "engineer 0",
+    "developer i", "developer 1", "developer 0",
+    "analyst i", "analyst 1", "analyst 0",
+    "scientist i", "scientist 1", "scientist 0",
+    // "Software Engineer I", "SDE I", etc.
+    "sde i", "sde 1", "swe i", "swe 1",
+    // "Associate" when used as a level indicator (Associate Software Engineer)
+    "associate software", "associate data", "associate developer",
+    "associate engineer", "associate analyst",
+    // "Level 0", "Level 1", "Level I"
+    "level 0", "level 1", "level i",
+    // Common new grad title patterns
+    "2025 start", "2026 start", "2025 grad", "2026 grad",
+    "class of 2025", "class of 2026",
+  ];
+
+  // Also check with regex for patterns like "Software Engineer I" at end of title
+  // or "Engineer I -" in middle of title
+  const newGradRegexPatterns = [
+    /\b(?:engineer|developer|analyst|scientist)\s+[i1]\b/i,
+    /\b(?:engineer|developer|analyst|scientist)\s+[i1]\s*[-–—]/i,
+    /\bengineer\s+[i1]\s*$/i,
+    /\bdeveloper\s+[i1]\s*$/i,
+    /\banalyst\s+[i1]\s*$/i,
+    /\bscientist\s+[i1]\s*$/i,
+  ];
+
   if (role === "intern") {
-    const internKeywords = ["intern", "internship", "co-op", "coop", "student"];
     const hasInternKeyword = internKeywords.some(keyword => titleLower.includes(keyword));
     if (!hasInternKeyword) {
       console.log(`❌ Job filtered out (not an intern position): "${title}"`);
       return false;
     }
   } else if (role === "new_grad") {
-    const newGradKeywords = ["new grad", "new graduate", "entry level", "entry-level", "junior", "recent graduate"];
     const hasNewGradKeyword = newGradKeywords.some(keyword => titleLower.includes(keyword));
-    if (!hasNewGradKeyword) {
+    const hasNewGradPattern = newGradRegexPatterns.some(regex => regex.test(title));
+    if (!hasNewGradKeyword && !hasNewGradPattern) {
       console.log(`❌ Job filtered out (not a new grad position): "${title}"`);
       return false;
     }
   } else if (role === "both") {
-    // For "both" role, accept either intern or new grad keywords
-    const internKeywords = ["intern", "internship", "co-op", "coop", "student"];
-    const newGradKeywords = ["new grad", "new graduate", "entry level", "entry-level", "junior", "recent graduate"];
-    
     const hasInternKeyword = internKeywords.some(keyword => titleLower.includes(keyword));
     const hasNewGradKeyword = newGradKeywords.some(keyword => titleLower.includes(keyword));
+    const hasNewGradPattern = newGradRegexPatterns.some(regex => regex.test(title));
     
-    if (!hasInternKeyword && !hasNewGradKeyword) {
+    if (!hasInternKeyword && !hasNewGradKeyword && !hasNewGradPattern) {
       console.log(`❌ Job filtered out (not an intern or new grad position): "${title}"`);
       return false;
     }
@@ -671,7 +655,8 @@ function isRelevantJob(title, company, description, role = null) {
  * @param {Array} jobs - Array of job objects
  * @param {string} role - Role type filter
  * @param {object} options - Optional filtering options
- * @param {Array} options.skipSources - Sources to bypass relevance filtering
+ * @param {Array} options.skipSources - Sources to bypass relevance filtering (exact match)
+ * @param {Function} options.skipSourceCheck - Function(source) => boolean to bypass relevance filtering
  * @returns {Array} Filtered jobs
  */
 function filterRelevantJobs(jobs, role = null, options = {}) {
@@ -681,11 +666,17 @@ function filterRelevantJobs(jobs, role = null, options = {}) {
   }
 
   const skipSources = Array.isArray(options.skipSources) ? options.skipSources : [];
+  const skipSourceCheck = typeof options.skipSourceCheck === "function" ? options.skipSourceCheck : null;
 
   console.log(`🔍 Filtering ${jobs.length} jobs for role: ${role || "any"}`);
 
   const filteredJobs = jobs.filter(job => {
+    // Check skip by exact source match (legacy)
     if (job?.source && skipSources.includes(job.source)) {
+      return true;
+    }
+    // Check skip by callback (supports partial/prefix matching)
+    if (job?.source && skipSourceCheck && skipSourceCheck(job.source)) {
       return true;
     }
 
@@ -704,7 +695,7 @@ function filterRelevantJobs(jobs, role = null, options = {}) {
 /**
  * Filter jobs to only include those posted in the last day
  * @param {Array} jobs - Array of job objects
- * @param {string} timeFilter - Time filter ("day", "week", "month")
+ * @param {string} timeFilter - Time filter ("day", "three_days", "week", "month")
  * @returns {Array} Filtered jobs from the specified time period
  */
 function filterJobsByDate(jobs, timeFilter = "day") {
@@ -722,6 +713,10 @@ function filterJobsByDate(jobs, timeFilter = "day") {
       // Set cutoff to start of yesterday
       const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
       cutoffDate = yesterday;
+      break;
+    case "three_days":
+    case "3_days":
+      cutoffDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
       break;
     case "week":
       cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
@@ -741,25 +736,43 @@ function filterJobsByDate(jobs, timeFilter = "day") {
   }
 
   console.log(`🔍 Filtering ${jobs.length} jobs for posts since ${cutoffDate.toLocaleString()}`);
-  
+
+  let unparseableDateLogged = false;
   const filteredJobs = jobs.filter(job => {
     // Try to parse the posted date
     let jobDate;
-    
+
     if (job.postedDate) {
       // Handle various date formats
       if (typeof job.postedDate === 'string') {
         // Try to parse common date formats
         const dateStr = job.postedDate.toLowerCase().trim();
-        
+
         // Skip empty or invalid date strings
         if (!dateStr || dateStr === '' || dateStr === 'n/a' || dateStr === 'unknown') {
-          console.log(`⚠️ Empty or invalid date for job: "${job.title}" - including it`);
           return true;
         }
-        
+
+        // "Just posted", "Today" -> treat as now (include)
+        if (/^just\s*posted|^today$/i.test(dateStr)) {
+          jobDate = new Date();
+        }
+        // "Yesterday"
+        else if (/^yesterday$/i.test(dateStr)) {
+          jobDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12, 0, 0, 0);
+        }
+        // "Hiring ongoing" / "Ongoing" -> include (treat as recent)
+        else if (/hiring\s*ongoing|ongoing$/i.test(dateStr)) {
+          jobDate = new Date();
+        }
+        // "30+ days ago" or "N days ago" with optional +
+        else if (dateStr.includes('ago') && dateStr.match(/(\d+)\s*\+\s*days?\s*ago/i)) {
+          const timeMatch = dateStr.match(/(\d+)\s*\+\s*days?\s*ago/i);
+          const amount = parseInt(timeMatch[1], 10);
+          jobDate = new Date(now.getTime() - Math.min(amount, 90) * 24 * 60 * 60 * 1000);
+        }
         // Handle GitHub age format (0d, 1d, 2d, 9d, etc.)
-        if (dateStr.match(/^\d+d$/)) {
+        else if (dateStr.match(/^\d+d$/)) {
           const timeMatch = dateStr.match(/^(\d+)d$/);
           if (timeMatch) {
             const amount = parseInt(timeMatch[1]);
@@ -774,7 +787,15 @@ function filterJobsByDate(jobs, timeFilter = "day") {
             jobDate = new Date(now.getTime() - amount * 30 * 24 * 60 * 60 * 1000);
           }
         }
-        // Handle relative dates like "2 hours ago", "1 day ago", etc.
+        // Handle "m" shorthand (1m, 2m, 3m, etc.)
+        else if (dateStr.match(/^\d+m$/)) {
+          const timeMatch = dateStr.match(/^(\d+)m$/);
+          if (timeMatch) {
+            const amount = parseInt(timeMatch[1]);
+            jobDate = new Date(now.getTime() - amount * 30 * 24 * 60 * 60 * 1000);
+          }
+        }
+        // Handle relative dates like "2 hours ago", "1 day ago", "30+ days ago", etc.
         else if (dateStr.includes('ago')) {
           const timeMatch = dateStr.match(/(\d+)\s*(hour|day|week|month)s?\s*ago/i);
           if (timeMatch) {
@@ -825,7 +846,10 @@ function filterJobsByDate(jobs, timeFilter = "day") {
     
     // If we couldn't parse the date, include the job (don't filter out)
     if (!jobDate || isNaN(jobDate.getTime())) {
-      console.log(`⚠️ Could not parse date for job: "${job.title}" - including it`);
+      if (!unparseableDateLogged) {
+        console.log(`⚠️ Could not parse date for job: "${job.title}" - including it (further unparseable dates in this batch not logged)`);
+        unparseableDateLogged = true;
+      }
       return true;
     }
     
@@ -859,7 +883,8 @@ function categorizeJob(job) {
     "data scientist", "data science", "machine learning", "ml engineer",
     "ai engineer", "artificial intelligence", "deep learning", "neural network",
     "data engineer", "analytics engineer", "mlops", "data platform engineer",
-    "nlp", "computer vision", "cv engineer", "quant engineer", "quantitative engineer"
+    "nlp", "computer vision", "cv engineer", "quant engineer", "quantitative engineer",
+    "research scientist", "applied scientist", "ai/ml", "machine learning engineer"
   ];
   
   // Check for data analysis keywords
@@ -879,25 +904,53 @@ function categorizeJob(job) {
     "cloud engineer", "systems administrator"
   ];
   
-  // Check category from job metadata if available (for JobRight repos)
-  const jobCategory = job.category || job.repoCategory;
-  if (jobCategory) {
-    if (jobCategory === "data_analysis" || jobCategory === "business_analyst") return "data_analysis";
-    if (jobCategory === "software_engineering") return "software_engineering";
-    if (jobCategory === "data_science_engineer") return "data_science_engineer";
-  }
+  // Title-based matching takes priority - check title first for accurate categorization
+  // This ensures jobs like "Data Scientist" from a "Data Analysis" repo go to the right channel
   
   // Check for data science/engineering first (most specific)
-  if (dataScienceKeywords.some(keyword => combinedText.includes(keyword))) {
+  const matchedDS = dataScienceKeywords.find(keyword => title.includes(keyword));
+  if (matchedDS) {
+    loggerService.log(`📂 categorizeJob: "${(job.title || "").substring(0, 60)}" -> data_science_engineer (title matched: "${matchedDS}")`);
     return "data_science_engineer";
   }
   
-  // Check for data analysis
-  if (dataAnalysisKeywords.some(keyword => combinedText.includes(keyword))) {
+  // Check for data analysis in title
+  const matchedDA = dataAnalysisKeywords.find(keyword => title.includes(keyword));
+  if (matchedDA) {
+    loggerService.log(`📂 categorizeJob: "${(job.title || "").substring(0, 60)}" -> data_analysis (title matched: "${matchedDA}")`);
     return "data_analysis";
   }
   
-  // Check for software engineering
+  // Check for software engineering in title
+  if (softwareKeywords.some(keyword => title.includes(keyword))) {
+    return "software_engineering";
+  }
+  
+  // If title didn't match, use explicit category from metadata (e.g., GitHub section headers)
+  const jobCategory = job.category || job.repoCategory;
+  if (jobCategory) {
+    if (jobCategory === "data_analysis" || jobCategory === "business_analyst") {
+      loggerService.log(`📂 categorizeJob: "${(job.title || "").substring(0, 60)}" -> data_analysis (metadata: ${jobCategory})`);
+      return "data_analysis";
+    }
+    if (jobCategory === "software_engineering") return "software_engineering";
+    if (jobCategory === "data_science_engineer") {
+      loggerService.log(`📂 categorizeJob: "${(job.title || "").substring(0, 60)}" -> data_science_engineer (metadata: ${jobCategory})`);
+      return "data_science_engineer";
+    }
+  }
+  
+  // Fallback: check description + company text for broader matching
+  if (dataScienceKeywords.some(keyword => combinedText.includes(keyword))) {
+    loggerService.log(`📂 categorizeJob: "${(job.title || "").substring(0, 60)}" -> data_science_engineer (description match)`);
+    return "data_science_engineer";
+  }
+  
+  if (dataAnalysisKeywords.some(keyword => combinedText.includes(keyword))) {
+    loggerService.log(`📂 categorizeJob: "${(job.title || "").substring(0, 60)}" -> data_analysis (description match)`);
+    return "data_analysis";
+  }
+  
   if (softwareKeywords.some(keyword => combinedText.includes(keyword))) {
     return "software_engineering";
   }
@@ -931,27 +984,9 @@ function getChannelId(role, category, client = null) {
   return channelId;
 }
 
-/**
- * Get the Discord channel object for a given role and category
- * @param {string} role - Role type: "intern" or "new_grad"
- * @param {string} category - Job category: "software_engineering", "data_analysis", or "data_science_engineer"
- * @param {object} client - Discord client
- * @returns {object|null} Discord channel object or null if not found
- */
-function getChannel(role, category, client) {
-  if (!client) return null;
-  
-  const channelId = getChannelId(role, category, client);
-  if (!channelId) return null;
-  
-  const channel = client.channels.cache.get(channelId);
-  if (!channel) {
-    loggerService.log(`⚠️ Channel not found in cache: ${channelId}`, "warn");
-    return null;
-  }
-  
-  return channel;
-}
+// NOTE: getChannel is defined above (async version with fetch fallback).
+// The synchronous version that was here has been removed to prevent
+// the duplicate declaration from overwriting the async one.
 
 /**
  * Route jobs to appropriate channels based on role and category
@@ -971,7 +1006,20 @@ function routeJobsToChannels(jobs, defaultRole = "intern") {
     if (role === "both" || (role !== "intern" && role !== "new_grad")) {
       const title = (job.title || "").toLowerCase();
       const internKeywords = ["intern", "internship", "co-op", "coop", "student"];
-      const newGradKeywords = ["new grad", "new graduate", "entry level", "entry-level", "junior", "recent graduate"];
+      const newGradKeywords = [
+        "new grad", "new graduate", "entry level", "entry-level",
+        "junior", "recent graduate", "early career",
+        "university grad", "university graduate", "college grad", "college graduate",
+        "new college grad", "new college graduate",
+        "engineer i", "engineer 1", "engineer 0",
+        "developer i", "developer 1", "developer 0",
+        "analyst i", "analyst 1", "analyst 0",
+        "scientist i", "scientist 1", "scientist 0",
+        "sde i", "sde 1", "swe i", "swe 1",
+        "associate software", "associate data", "associate developer",
+        "associate engineer", "associate analyst",
+        "level 0", "level 1", "level i",
+      ];
       
       if (internKeywords.some(keyword => title.includes(keyword))) {
         role = "intern";
@@ -994,6 +1042,11 @@ function routeJobsToChannels(jobs, defaultRole = "intern") {
       routedJobs.set(routeKey, []);
     }
     routedJobs.get(routeKey).push(job);
+  }
+  
+  // Log routing summary for diagnostics
+  for (const [routeKey, channelJobs] of routedJobs.entries()) {
+    loggerService.log(`📬 Route ${routeKey}: ${channelJobs.length} jobs`);
   }
   
   return routedJobs;
@@ -1025,95 +1078,89 @@ async function sendJobsToDiscord(jobs, client, sourceName, defaultRole = "intern
   if (!client || !jobs || jobs.length === 0) return;
   
   try {
-    const sourceLower = (sourceName || "").toLowerCase();
-    if (sourceLower.includes("wellfound") && config.startupChannelId) {
-      let startupChannel = client.channels.cache.get(config.startupChannelId);
-      if (!startupChannel) {
-        try {
-          startupChannel = await client.channels.fetch(config.startupChannelId);
-        } catch (err) {
-          loggerService.log(
-            `⚠️ Could not fetch startup channel ${config.startupChannelId}: ${err.message}`,
-            "warn"
-          );
-          return;
-        }
-      }
-
-      await startupChannel.send(
-        `**${sourceName}** - ${jobs.length} new startup job${jobs.length > 1 ? "s" : ""}`
-      );
-
-      const embedColor = getSourceEmbedColor(sourceName);
-      for (const job of jobs) {
-        if (!job.title || !job.url) continue;
-
-        const embed = new EmbedBuilder()
-          .setTitle(job.title)
-          .setURL(job.url)
-          .setColor(embedColor)
-          .setDescription(job.company || "Company not specified")
-          .addFields(
-            { name: "Location", value: job.location || "Not specified", inline: true },
-            { name: "Posted", value: job.postedDate || "Recent", inline: true }
-          )
-          .setFooter({
-            text: `Source: ${sourceName} | ID: ${job.id ? job.id.substring(0, 10) : "unknown"}`,
-          });
-
-        try {
-          await startupChannel.send({ embeds: [embed] });
-          await delay(1000);
-        } catch (err) {
-          loggerService.log(`Error sending startup job to Discord: ${err.message}`, "error");
-        }
-      }
-
-      return;
-    }
-
-    // Route jobs to appropriate channels
+    // Route jobs to appropriate channels (6 channels: 3 intern + 3 new_grad)
     const routedJobs = routeJobsToChannels(jobs, defaultRole);
     const embedColor = getSourceEmbedColor(sourceName);
-    
-    // Send jobs to each channel
+
+    // Discord: max 10 embeds per message; stay under rate limits by round-robin across channels
+    const EMBEDS_PER_MESSAGE = 10;
+    const DELAY_BETWEEN_MESSAGES_MS = config.discordSerialization?.delayBetweenMessagesMs ?? 2000;
+
+    // Build per-channel data: header + batches
+    const channelSends = [];
     for (const [routeKey, channelJobs] of routedJobs.entries()) {
       const [role, category] = routeKey.split("::");
-      
-      const targetChannel = getChannel(role, category, client);
-      
+      const targetChannel = await getChannel(role, category, client);
       if (!targetChannel) {
         loggerService.log(`⚠️ Could not find channel for ${routeKey}, skipping ${channelJobs.length} jobs`, "warn");
         continue;
       }
-      
-      // Send header message
-      await targetChannel.send(`**${sourceName}** - ${channelJobs.length} new ${role === "intern" ? "internship" : "new grad"} posting${channelJobs.length > 1 ? "s" : ""} (${category.replace("_", " ")})`);
-      
-      // Send each job as an embed
-      for (const job of channelJobs) {
-        if (!job.title || !job.url) continue;
-        
-        const embed = new EmbedBuilder()
-          .setTitle(job.title)
-          .setURL(job.url)
-          .setColor(embedColor)
-          .setDescription(job.company || "Company not specified")
-          .addFields(
-            { name: "Location", value: job.location || "Not specified", inline: true },
-            { name: "Posted", value: job.postedDate || "Recent", inline: true }
-          )
-          .setFooter({
-            text: `Source: ${sourceName} | ID: ${job.id ? job.id.substring(0, 10) : "unknown"}`,
-          });
-        
+      const validJobs = channelJobs.filter((j) => j.title && j.url);
+      const batches = [];
+      for (let i = 0; i < validJobs.length; i += EMBEDS_PER_MESSAGE) {
+        batches.push(validJobs.slice(i, i + EMBEDS_PER_MESSAGE));
+      }
+      channelSends.push({
+        routeKey,
+        channel: targetChannel,
+        role,
+        category,
+        totalCount: validJobs.length,
+        batches,
+      });
+    }
+
+    // Send header to each channel first (one per channel, with delay)
+    for (const entry of channelSends) {
+      try {
+        await entry.channel.send(
+          `**${sourceName}** - ${entry.totalCount} new ${entry.role === "intern" ? "internship" : "new grad"} posting${entry.totalCount !== 1 ? "s" : ""} (${entry.category.replace("_", " ")})`
+        );
+        await delay(DELAY_BETWEEN_MESSAGES_MS);
+      } catch (err) {
+        loggerService.log(`Error sending header to ${entry.routeKey}: ${err.message}`, "error");
+      }
+    }
+
+    // Round-robin: send one batch from each channel in turn to spread load and stay under limits
+    let roundIndex = 0;
+    let sentPerChannel = {};
+    channelSends.forEach((e) => { sentPerChannel[e.routeKey] = 0; });
+
+    while (true) {
+      let anySent = false;
+      for (const entry of channelSends) {
+        if (roundIndex >= entry.batches.length) continue;
+        const batch = entry.batches[roundIndex];
+        const embeds = batch.map((job) =>
+          new EmbedBuilder()
+            .setTitle(job.title)
+            .setURL(job.url)
+            .setColor(embedColor)
+            .setDescription(job.company || "Company not specified")
+            .addFields(
+              { name: "Location", value: job.location || "Not specified", inline: true },
+              { name: "Posted", value: job.postedDate || "Recent", inline: true }
+            )
+            .setFooter({
+              text: `Source: ${sourceName} | ID: ${job.id ? job.id.substring(0, 10) : "unknown"}`,
+            })
+        );
         try {
-          await targetChannel.send({ embeds: [embed] });
-          await delay(1000);
+          await entry.channel.send({ embeds });
+          sentPerChannel[entry.routeKey] += batch.length;
+          anySent = true;
+          await delay(DELAY_BETWEEN_MESSAGES_MS);
         } catch (err) {
-          loggerService.log(`Error sending job to Discord: ${err.message}`, "error");
+          loggerService.log(`Error sending job batch to Discord (${entry.routeKey}): ${err.message}`, "error");
         }
       }
+      if (!anySent) break;
+      roundIndex++;
+    }
+
+    for (const [routeKey, count] of Object.entries(sentPerChannel)) {
+      loggerService.log(`✅ Sent ${count} jobs to Discord channel ${routeKey}`);
     }
   } catch (error) {
     loggerService.log(`Error sending jobs to Discord: ${error.message}`, "error");

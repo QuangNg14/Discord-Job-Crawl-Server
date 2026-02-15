@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
@@ -6,6 +8,32 @@ const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
 const { delay, filterRelevantJobs, filterJobsByDate, sendJobsToDiscord } = require("../utils/helpers");
+
+const ARTIFACTS_DIR = path.join(process.cwd(), "artifacts");
+
+/**
+ * Save HTML and screenshot for LinkedIn failure diagnostics.
+ * @param {import('puppeteer').Page} page
+ * @param {string} label - e.g. linkedin-no-results
+ * @returns {{ htmlPath: string, screenshotPath: string } | null}
+ */
+async function saveLinkedInArtifacts(page, label = "linkedin") {
+  try {
+    fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const base = path.join(ARTIFACTS_DIR, `${label}-${ts}`);
+    const htmlPath = `${base}.html`;
+    const screenshotPath = `${base}.png`;
+    const html = await page.content();
+    fs.writeFileSync(htmlPath, html, "utf8");
+    await page.screenshot({ path: screenshotPath, fullPage: false });
+    logger.log(`LinkedIn artifacts saved: ${htmlPath}, ${screenshotPath}`, "warn");
+    return { htmlPath, screenshotPath };
+  } catch (err) {
+    logger.log(`Failed to save LinkedIn artifacts: ${err.message}`, "warn");
+    return null;
+  }
+}
 
 /**
  * Extract clean text from element, removing unwanted characters
@@ -63,14 +91,33 @@ async function scrapeLinkedIn(searchUrl, maxJobs) {
     await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 45000 });
     await delay(5000); // Increased wait time
 
-    // Wait for job listings to load
+    let containerFound = false;
     try {
       await page.waitForSelector(
         ".jobs-search__results-list, .job-search-card, .jobs-search-results-list",
         { timeout: 10000 }
       );
+      containerFound = true;
     } catch (e) {
       logger.log("Could not find job listings container", "warn");
+      const pageUrl = page.url();
+      const pageTitle = await page.title().catch(() => "");
+      const classify = await page.evaluate(() => {
+        const body = (document.body && document.body.innerText) ? document.body.innerText.slice(0, 3000).toLowerCase() : "";
+        const hasNoResults = /\b(no\s+results|0\s+results|we couldn't find|didn't find any|no\s+jobs\s+match)\b/.test(body);
+        const hasInterstitial = /\b(verify|unusual activity|enable cookies|captcha|security check|confirm you're human)\b/.test(body);
+        return { hasNoResults, hasInterstitial, bodySnippet: body.slice(0, 500) };
+      }).catch(() => ({ hasNoResults: false, hasInterstitial: false, bodySnippet: "" }));
+
+      let outcome = "selector_missing";
+      if (classify.hasNoResults) outcome = "no_results";
+      else if (classify.hasInterstitial) outcome = "interstitial";
+
+      await saveLinkedInArtifacts(page, `linkedin-${outcome}`);
+      logger.log(`LinkedIn page classification: url=${pageUrl}, title=${pageTitle?.slice(0, 60)}, outcome=${outcome}`, "warn");
+
+      await browser.close();
+      return { jobs: [], outcome };
     }
 
     const jobs = await page.evaluate((maxJobs) => {
@@ -274,52 +321,69 @@ async function scrapeLinkedIn(searchUrl, maxJobs) {
     }
 
     await browser.close();
-    return jobs;
+    return { jobs, outcome: "success" };
   } catch (error) {
     logger.log(`Error scraping LinkedIn: ${error.message}`, "error");
-    if (browser) await browser.close();
-    return [];
+    if (browser) await browser.close().catch(() => {});
+    return { jobs: [], outcome: "error" };
   }
 }
 
 /**
- * Scrape LinkedIn with retry logic
+ * Scrape LinkedIn with retry logic. Treats no_results as success (0 jobs), interstitial retries once, selector_missing logs and returns 0.
  * @param {string} searchUrl - The LinkedIn search URL
  * @param {number} maxJobs - Maximum number of jobs to return
- * @param {number} retries - Number of retry attempts
+ * @param {number} retries - Max retry attempts for transient failures
  * @returns {Array} Array of job objects
  */
 async function scrapeLinkedInWithRetry(searchUrl, maxJobs, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       logger.log(
-        `LinkedIn scraping attempt ${attempt}/${retries} for: ${searchUrl}`
+        `LinkedIn scraping attempt ${attempt}/${retries} for: ${searchUrl.slice(0, 80)}...`
       );
-      const jobs = await scrapeLinkedIn(searchUrl, maxJobs);
+      const result = await scrapeLinkedIn(searchUrl, maxJobs);
+      const jobs = result.jobs || [];
+      const outcome = result.outcome || "success";
 
-      if (jobs && jobs.length > 0) {
-        logger.log(
-          `Successfully scraped ${jobs.length} jobs on attempt ${attempt}`
-        );
+      if (outcome === "no_results") {
+        logger.log(`LinkedIn: no results for this query (treating as success, 0 jobs)`, "info");
+        return [];
+      }
+      if (outcome === "selector_missing") {
+        logger.log(`LinkedIn: job listings container missing; artifacts saved. URL: ${searchUrl.slice(0, 80)}...`, "warn");
+        return [];
+      }
+      if (outcome === "interstitial") {
+        logger.log(`LinkedIn: page looks like interstitial/block (attempt ${attempt})`, "warn");
+        if (attempt < retries) {
+          await delay(15000 * attempt);
+          continue;
+        }
+        return [];
+      }
+      if (outcome === "success" && jobs.length > 0) {
+        logger.log(`Successfully scraped ${jobs.length} jobs on attempt ${attempt}`);
         return jobs;
-      } else {
-        logger.log(`No jobs found on attempt ${attempt}`, "warn");
+      }
+      if (outcome === "success" && jobs.length === 0) {
+        logger.log(`LinkedIn: container found but 0 jobs extracted (treating as no results)`, "info");
+        return [];
+      }
+      if (outcome === "error") {
         if (attempt === retries) {
-          logger.log(
-            `All ${retries} attempts failed for: ${searchUrl}`,
-            "error"
-          );
+          logger.log(`All ${retries} attempts failed for: ${searchUrl.slice(0, 80)}...`, "error");
           return [];
         }
-        await delay(10000 * attempt); // Exponential backoff
+        await delay(15000 * attempt);
       }
     } catch (error) {
       logger.log(`Attempt ${attempt} failed: ${error.message}`, "error");
       if (attempt === retries) {
-        logger.log(`All ${retries} attempts failed for: ${searchUrl}`, "error");
+        logger.log(`All ${retries} attempts failed for: ${searchUrl.slice(0, 80)}...`, "error");
         return [];
       }
-      await delay(15000 * attempt); // Exponential backoff
+      await delay(15000 * attempt);
     }
   }
   return [];
@@ -352,8 +416,24 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "both"
       await logChannel.send("LinkedIn Job Postings Update");
     }
 
+    const normalizedRole = role === "new_grad" ? "new_grad" : role;
+    const keywordList = config.linkedin.jobKeywords.filter((keyword) => {
+      const lowerKeyword = keyword.toLowerCase();
+      const isInternKeyword =
+        lowerKeyword.includes("intern") || lowerKeyword.includes("internship");
+      if (normalizedRole === "intern") return isInternKeyword;
+      if (normalizedRole === "new_grad") return !isInternKeyword;
+      return true;
+    });
+
+    if (keywordList.length !== config.linkedin.jobKeywords.length) {
+      logger.log(
+        `🎯 LinkedIn keyword filter applied for role: ${normalizedRole} (${keywordList.length}/${config.linkedin.jobKeywords.length})`
+      );
+    }
+
     // Process each keyword and location combination
-    for (const keyword of config.linkedin.jobKeywords) {
+    for (const keyword of keywordList) {
       for (const location of config.linkedin.jobLocations) {
         try {
           // Build search URL with parameters
@@ -409,9 +489,17 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "both"
             continue;
           }
 
-          // Apply date filtering for daily scraping (only jobs from last day)
-          const recentJobs = filterJobsByDate(relevantJobs, "day");
-          logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last day for "${keyword}" in "${location}"`);
+          // Map API time filter to filterJobsByDate label (day, three_days, week, month)
+          const dateFilterLabel =
+            timeFilter === config.linkedin.timeFilters.threeDays
+              ? "three_days"
+              : timeFilter === config.linkedin.timeFilters.week
+                ? "week"
+                : timeFilter === config.linkedin.timeFilters.month
+                  ? "month"
+                  : "day";
+          const recentJobs = filterJobsByDate(relevantJobs, dateFilterLabel);
+          logger.log(`📅 Date filtering: ${recentJobs.length}/${relevantJobs.length} jobs from last ${dateFilterLabel} for "${keyword}" in "${location}"`);
           
           if (recentJobs.length === 0) {
             logger.log(

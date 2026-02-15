@@ -2,3 +2,5 @@
 node_modules/
 logs/
 cache/
+artifacts/
+.puppeteer-tmp/

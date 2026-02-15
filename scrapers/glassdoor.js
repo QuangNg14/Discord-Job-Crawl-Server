@@ -7,27 +7,57 @@ const logger = require("../services/logger");
 const mongoService = require("../services/mongo");
 const { EmbedBuilder } = require("discord.js");
 const { delay, filterRelevantJobs } = require("../utils/helpers");
+const { getPuppeteerLaunchOptions } = require("../utils/puppeteerLaunch");
+
+/**
+ * Slugify for Glassdoor URL path (lowercase, hyphens, no leading/trailing dashes).
+ * @param {string} text
+ * @returns {string}
+ */
+function slugify(text = "") {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+/**
+ * Build Glassdoor job search URL for a given keyword and location.
+ * Uses the same SRCH query pattern as the static config URLs.
+ * @param {string} keyword - e.g. "software engineer"
+ * @param {string} location - e.g. "United States"
+ * @returns {string}
+ */
+function buildGlassdoorSearchUrl(keyword, location) {
+  const locSlug = slugify(location) || "us";
+  const kwSlug = slugify(keyword) || "jobs";
+  return `https://www.glassdoor.com/Job/${locSlug}-${kwSlug}-jobs-SRCH_IL.0,2_IN1_KO3,20.htm`;
+}
 
 /**
  * Scrape Glassdoor search results
  * @param {string} searchUrl - The Glassdoor search URL
  * @param {number} maxJobs - Maximum number of jobs to return
+ * @param {{ keyword?: string }} options - Optional; if keyword provided, log when page title doesn't match
  * @returns {Array} Array of job objects
  */
-async function scrapeGlassdoor(searchUrl, maxJobs) {
+async function scrapeGlassdoor(searchUrl, maxJobs, options = {}) {
   logger.log(`Scraping Glassdoor: ${searchUrl}`);
   let browser;
 
   try {
-    browser = await puppeteer.launch({
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-web-security",
-        "--disable-features=IsolateOrigins,site-per-process",
-      ],
-    });
+    browser = await puppeteer.launch(
+      getPuppeteerLaunchOptions({
+        headless: "new",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-web-security",
+          "--disable-features=IsolateOrigins,site-per-process",
+        ],
+      })
+    );
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
@@ -35,6 +65,20 @@ async function scrapeGlassdoor(searchUrl, maxJobs) {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     );
     await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 60000 });
+
+    if (options.keyword) {
+      const title = await page.title();
+      const titleLower = title.toLowerCase();
+      const kwLower = options.keyword.toLowerCase();
+      if (!titleLower.includes(kwLower) && !titleLower.includes(kwLower.replace(/\s+/g, "-"))) {
+        logger.log(`Glassdoor URL/keyword mismatch: expected keyword "${options.keyword}" in page title, got: "${title}"`, "warn");
+        if (config.debugMode) {
+          const html = await page.content();
+          fs.writeFileSync("glassdoor-keyword-mismatch.html", html);
+          logger.log("Saved glassdoor-keyword-mismatch.html for debugging", "warn");
+        }
+      }
+    }
 
     // Handle potential cookie consent dialog
     try {
@@ -490,24 +534,18 @@ async function scrapeAllJobs(timeFilter, client, mode = "discord", role = "both"
     for (const keyword of config.glassdoor.jobKeywords) {
       for (const location of config.glassdoor.jobLocations) {
         try {
-          const encodedKeyword = encodeURIComponent(keyword);
-          const encodedLocation = encodeURIComponent(location);
-          logger.log(
-            `Encoded keyword: ${encodedKeyword}, Encoded location: ${encodedLocation}`
-          );
-
-          // Build the search URL
-          const searchUrl = config.glassdoor.searchUrls[timeFilter] || config.glassdoor.searchUrls.day;
+          // Build the search URL from keyword and location (fix: was using static URL for all)
+          const searchUrl = buildGlassdoorSearchUrl(keyword, location);
           logger.log(`Scraping Glassdoor for "${keyword}" in "${location}"`);
           logger.log(`Search URL: ${searchUrl}`);
 
           // Determine job limit based on mode
-          const jobLimit = mode === "comprehensive" 
-            ? config.glassdoor.jobLimits.comprehensive 
+          const jobLimit = mode === "comprehensive"
+            ? config.glassdoor.jobLimits.comprehensive
             : config.glassdoor.jobLimits.discord;
 
           // Scrape all available job postings
-          const jobs = await scrapeGlassdoor(searchUrl);
+          const jobs = await scrapeGlassdoor(searchUrl, jobLimit, { keyword });
           logger.log(`Raw jobs found for "${keyword}": ${jobs.length}`);
           
           if (!jobs || jobs.length === 0) {

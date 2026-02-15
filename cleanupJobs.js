@@ -30,10 +30,8 @@ class JobCleanup {
         linkedin: this.db.collection(config.mongo.collections.linkedin),
         simplyhired: this.db.collection(config.mongo.collections.simplyhired),
         ziprecruiter: this.db.collection(config.mongo.collections.ziprecruiter),
-        careerjet: this.db.collection(config.mongo.collections.careerjet),
         jobright: this.db.collection(config.mongo.collections.jobright),
         glassdoor: this.db.collection(config.mongo.collections.glassdoor),
-        dice: this.db.collection(config.mongo.collections.dice),
         github: this.db.collection(config.mongo.collections.github),
       };
 

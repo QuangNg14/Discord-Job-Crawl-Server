@@ -21,7 +21,8 @@ const linkedinScraper = require("./scrapers/linkedin");
 const ziprecruiterScraper = require("./scrapers/ziprecruiter");
 const jobrightScraper = require("./scrapers/jobright");
 const githubScraper = require("./scrapers/github");
-const wellfoundScraper = require("./scrapers/wellfound");
+const simplyhiredScraper = require("./scrapers/simplyhired");
+const glassdoorScraper = require("./scrapers/glassdoor");
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -57,16 +58,6 @@ const availableScrapers = {
     name: "GitHub",
     scraper: (client) =>
       githubScraper.scrapeAllJobs(client, "comprehensive", "both", "week"),
-  },
-  wellfound: {
-    name: "WellFound",
-    scraper: (client) =>
-      wellfoundScraper.scrapeAllJobs(
-        client,
-        "comprehensive",
-        "both",
-        config.wellfound?.timeFilters?.threeMonths || "three_months"
-      ),
   },
 };
 
@@ -204,25 +195,56 @@ async function collectJobsFromSource(
       },
     };
 
-    // Call the scraper function with the specified role
-    const result = await scraperFunction(mockClient, role);
+    loggerService.log(`📡 [${sourceName}] Scraper starting (role=${role})...`);
+    const scraperStart = Date.now();
 
-    if (result && result.jobsFound > 0) {
+    let result;
+    try {
+      result = await scraperFunction(mockClient, role);
+    } catch (scraperErr) {
+      loggerService.log(`❌ [${sourceName}] Scraper threw: ${scraperErr.message}`, "error");
+      loggerService.log(`❌ [${sourceName}] Stack: ${scraperErr.stack}`, "error");
+      throw scraperErr;
+    }
+
+    const scraperDuration = Date.now() - scraperStart;
+    const rawCount = result?.jobs?.length ?? 0;
+    const reportedNew = result?.jobsFound ?? 0;
+    loggerService.log(`📡 [${sourceName}] Scraper returned in ${scraperDuration}ms: jobsFound=${reportedNew}, jobs.length=${rawCount}${result?.errorCount > 0 ? `, errors=${result.errorCount}` : ""}`);
+
+    const jobsAvailable = result && ((result.jobsFound > 0) || (result.jobs && result.jobs.length > 0));
+    if (jobsAvailable) {
       loggerService.log(
         `✅ Collected ${
           result.jobsFound
-        } jobs from ${sourceName} (${role}) in ${Date.now() - startTime}ms`
+        } new jobs (${(result.jobs || []).length} total) from ${sourceName} (${role}) in ${Date.now() - startTime}ms`
       );
 
       let jobsForProcessing = result.jobs || [];
       const skipMongoDedupe = options?.skipMongoDedupe === true;
+
       if (dedupeContext?.enabled && jobsForProcessing.length > 0) {
-        if (!skipMongoDedupe) {
-          jobsForProcessing =
-            await mongoService.filterNewJobsByNormalizedId(jobsForProcessing);
+        // Cross-day dedup: use the pre-run snapshot of known IDs (taken BEFORE
+        // scrapers started adding to MongoDB). This avoids the race condition
+        // where scrapers cache jobs internally, then the outer dedup thinks
+        // they are "old" because they were just added during this same run.
+        // Skip for curated sources (like JobRight) that explicitly opt out.
+        if (!skipMongoDedupe && dedupeContext.preRunIds && dedupeContext.preRunIds.size > 0) {
+          const beforeCount = jobsForProcessing.length;
+          jobsForProcessing = jobsForProcessing.filter((job) => {
+            const nid = job.normalizedId || generateJobId(job);
+            return !dedupeContext.preRunIds.has(nid);
+          });
+          if (jobsForProcessing.length < beforeCount) {
+            loggerService.log(
+              `🧹 Cross-day dedup: ${beforeCount} → ${jobsForProcessing.length} (removed ${beforeCount - jobsForProcessing.length} already-known jobs)`
+            );
+          }
         }
 
+        // Cross-source dedup within this run: prevent same job from multiple sources
         if (dedupeContext.seenNormalizedIds) {
+          const beforeDedupe = jobsForProcessing.length;
           const uniqueJobs = [];
           for (const job of jobsForProcessing) {
             const normalizedId = job.normalizedId || generateJobId(job);
@@ -232,8 +254,13 @@ async function collectJobsFromSource(
             }
           }
           jobsForProcessing = uniqueJobs;
+          if (beforeDedupe !== jobsForProcessing.length) {
+            loggerService.log(`📡 [${sourceName}] After in-run dedup: ${beforeDedupe} → ${jobsForProcessing.length} jobs`);
+          }
         }
       }
+
+      loggerService.log(`📡 [${sourceName}] Sending ${jobsForProcessing.length} jobs to Discord (${role})`);
 
       // Send individual source summary to Discord
       if (client) {
@@ -280,9 +307,7 @@ async function collectJobsFromSource(
       };
     } else {
       loggerService.log(
-        `⚠️ No jobs collected from ${sourceName} (${role}) in ${
-          Date.now() - startTime
-        }ms`
+        `⚠️ [${sourceName}] No jobs collected (${role}) in ${Date.now() - startTime}ms (scraper returned jobsFound=${reportedNew}, jobs.length=${rawCount})`
       );
 
       // Send empty summary to Discord
@@ -312,9 +337,10 @@ async function collectJobsFromSource(
     }
   } catch (error) {
     loggerService.log(
-      `❌ Error collecting jobs from ${sourceName} (${role}): ${error.message}`,
+      `❌ [${sourceName}] Error collecting jobs (${role}): ${error.message}`,
       "error"
     );
+    loggerService.log(`❌ [${sourceName}] Stack: ${error.stack}`, "error");
 
     // Send error summary to Discord
     if (client) {
@@ -364,6 +390,8 @@ async function runParallelScraping(tasks, priority, channel, client, options = {
     // Sequential processing
     const results = [];
     for (const task of tasks) {
+      // Merge task-specific options with global options (task options override)
+      const mergedOptions = { ...options, ...(task.options || {}) };
       const result = await collectJobsFromSource(
         task.scraper,
         task.name,
@@ -371,7 +399,7 @@ async function runParallelScraping(tasks, priority, channel, client, options = {
         client,
         priority,
         task.role,
-        task.options || options
+        mergedOptions
       );
       results.push({ ...result, name: task.name, priority, role: task.role });
       await delay(2000); // Delay between sources
@@ -397,6 +425,8 @@ async function runParallelScraping(tasks, priority, channel, client, options = {
         await delay(staggerStartMs);
       }
 
+      // Merge task-specific options with global options (task options override)
+      const mergedOptions = { ...options, ...(task.options || {}) };
       const result = await collectJobsFromSource(
         task.scraper,
         task.name,
@@ -404,7 +434,7 @@ async function runParallelScraping(tasks, priority, channel, client, options = {
         client,
         priority,
         task.role,
-        task.options || options
+        mergedOptions
       );
       results[index] = { ...result, name: task.name, priority, role: task.role };
     }
@@ -547,8 +577,22 @@ async function runComprehensiveScrape(client) {
   const startTime = new Date();
   const dailyConfig = config.dailyScraping;
   const optimization = dailyConfig.optimization;
+  const requestedRole =
+    process.env.DAILY_ROLE &&
+    ["intern", "new_grad", "both"].includes(process.env.DAILY_ROLE)
+      ? process.env.DAILY_ROLE
+      : "both";
+
+  const skipLinkedIn = process.env.SKIP_LINKEDIN === "true" || process.env.SKIP_LINKEDIN === "1";
+  const runOtherSourcesOnly = process.env.RUN_OTHER_SOURCES_ONLY === "true" || process.env.RUN_OTHER_SOURCES_ONLY === "1";
+  const sourcesLabel = runOtherSourcesOnly
+    ? "ZipRecruiter, SimplyHired, Glassdoor (LinkedIn, GitHub, JobRight OFF)"
+    : skipLinkedIn
+      ? "GitHub (SimplifyJobs), JobRight only (LinkedIn skipped)"
+      : "LinkedIn, GitHub, JobRight";
 
   loggerService.log("🚀 Starting optimized comprehensive job scraping...");
+  if (runOtherSourcesOnly) loggerService.log("🧪 Mode: RUN_OTHER_SOURCES_ONLY — testing other sources only.");
   loggerService.log(`📅 Date: ${startTime.toLocaleDateString()}`);
   loggerService.log(`⏰ Time: ${startTime.toLocaleTimeString()}`);
   loggerService.log(
@@ -568,7 +612,7 @@ async function runComprehensiveScrape(client) {
           fields: [
             {
               name: "📊 Sources",
-              value: "LinkedIn, GitHub, ZipRecruiter, JobRight",
+              value: sourcesLabel,
               inline: false,
             },
             {
@@ -632,6 +676,13 @@ async function runComprehensiveScrape(client) {
           };
         })();
 
+  // When RUN_OTHER_SOURCES_ONLY=true: run only ZipRecruiter, SimplyHired, Glassdoor (WellFound, Dice, CareerJet removed)
+  const otherSourceTasks = [
+    { name: "ZipRecruiter", priority: "high", role: "both", scraper: (client, role) => ziprecruiterScraper.scrapeAllJobs(config.ziprecruiter.timeFilters.threeDays, client, "comprehensive", role), jobLimit: dailyConfig.jobLimits.ziprecruiter },
+    { name: "SimplyHired", priority: "medium", role: "both", scraper: (client, role) => simplyhiredScraper.scrapeAllJobs(config.simplyhired.timeFilters.week, client, "comprehensive", role), jobLimit: dailyConfig.jobLimits.simplyhired },
+    { name: "Glassdoor", priority: "medium", role: "both", scraper: (client, role) => glassdoorScraper.scrapeAllJobs("week", client, "comprehensive", role), jobLimit: dailyConfig.jobLimits.glassdoor },
+  ];
+
   // Define scraping tasks with priority and daily limits - now including both roles
   const sourceTasks = [
     // High Priority Sources - Internships
@@ -641,7 +692,7 @@ async function runComprehensiveScrape(client) {
       role: "intern",
       scraper: (client, role) =>
         linkedinScraper.scrapeAllJobs(
-          config.linkedin.timeFilters.day,
+          config.linkedin.timeFilters.threeDays,
           client,
           "comprehensive",
           role
@@ -653,7 +704,7 @@ async function runComprehensiveScrape(client) {
       priority: "high",
       role: "intern",
       scraper: (client, role) =>
-        githubScraper.scrapeAllJobs(client, "comprehensive", role, "day"),
+        githubScraper.scrapeAllJobs(client, "comprehensive", role, "three_days"),
       jobLimit: dailyConfig.jobLimits.github,
     },
 
@@ -664,7 +715,7 @@ async function runComprehensiveScrape(client) {
       role: "new_grad",
       scraper: (client, role) =>
         linkedinScraper.scrapeAllJobs(
-          config.linkedin.timeFilters.day,
+          config.linkedin.timeFilters.threeDays,
           client,
           "comprehensive",
           role
@@ -676,39 +727,12 @@ async function runComprehensiveScrape(client) {
       priority: "high",
       role: "new_grad",
       scraper: (client, role) =>
-        githubScraper.scrapeAllJobs(client, "comprehensive", role, "day"),
+        githubScraper.scrapeAllJobs(client, "comprehensive", role, "three_days"),
       jobLimit: dailyConfig.jobLimits.github,
     },
 
-    // Medium Priority Sources - Internships
-    {
-      name: "ZipRecruiter (Internships)",
-      priority: "medium",
-      role: "intern",
-      scraper: (client, role) =>
-        ziprecruiterScraper.scrapeAllJobs(
-          config.ziprecruiter.timeFilters.day,
-          client,
-          "comprehensive",
-          role
-        ),
-      jobLimit: dailyConfig.jobLimits.ziprecruiter,
-    },
-
-    // Medium Priority Sources - New Graduate/Entry Level
-    {
-      name: "ZipRecruiter (New Grad)",
-      priority: "medium",
-      role: "new_grad",
-      scraper: (client, role) =>
-        ziprecruiterScraper.scrapeAllJobs(
-          config.ziprecruiter.timeFilters.day,
-          client,
-          "comprehensive",
-          role
-        ),
-      jobLimit: dailyConfig.jobLimits.ziprecruiter,
-    },
+    // ZipRecruiter disabled - scraper is broken (0 jobs returned, likely site blocking)
+    // Re-enable when scraping logic is fixed.
 
     // Low Priority Sources - Both roles (JobRight handles both internally)
     {
@@ -716,49 +740,73 @@ async function runComprehensiveScrape(client) {
       priority: "low",
       role: "both",
       scraper: (client, role) =>
-        jobrightScraper.scrapeAllJobs(client, "comprehensive", role),
+        jobrightScraper.scrapeAllJobs(client, "comprehensive", role, "three_days"),
       options: {
         skipMongoDedupe: true,
       },
       jobLimit: dailyConfig.jobLimits.jobright,
     },
-    {
-      name: "WellFound",
-      priority: "low",
-      role: "both",
-      scraper: (client, role) =>
-        wellfoundScraper.scrapeAllJobs(
-          client,
-          "comprehensive",
-          role,
-          config.wellfound?.timeFilters?.threeMonths || "three_months"
-        ),
-      jobLimit: dailyConfig.jobLimits.wellfound,
-    },
   ];
 
   // Sort by priority
   const priorityOrder = { high: 1, medium: 2, low: 3 };
-  sourceTasks.sort(
+  const tasksToUse = runOtherSourcesOnly ? otherSourceTasks : sourceTasks;
+  tasksToUse.sort(
     (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]
   );
 
+  if (runOtherSourcesOnly) {
+    loggerService.log(`🧪 RUN_OTHER_SOURCES_ONLY=true: LinkedIn, GitHub, JobRight OFF. Running only: ${tasksToUse.map((t) => t.name).join(", ")}`);
+  }
+
+  if (requestedRole !== "both") {
+    loggerService.log(`🎯 Role filter enabled: ${requestedRole}`);
+  }
+
+  // Apply LinkedIn skip if set (tasksByRole used for role filtering below)
+  let tasksByRole = tasksToUse;
+  if (!runOtherSourcesOnly && skipLinkedIn) {
+    tasksByRole = tasksToUse.filter(
+      (task) => !(task.name || "").toLowerCase().includes("linkedin")
+    );
+    loggerService.log(`⏭️ LinkedIn disabled (SKIP_LINKEDIN=true). Running ${tasksByRole.length} sources: GitHub + JobRight only.`);
+  }
+
+  const filteredTasks =
+    requestedRole === "both"
+      ? tasksByRole
+      : tasksByRole
+          .filter(
+            (task) => task.role === requestedRole || task.role === "both"
+          )
+          .map((task) => ({
+            ...task,
+            role: task.role === "both" ? requestedRole : task.role,
+          }));
+
   loggerService.log(
-    `📋 Running ${sourceTasks.length} sources with intelligent optimization...`
+    `📋 Running ${filteredTasks.length} sources with intelligent optimization...`
   );
 
   // Collect all jobs from all sources
   const allJobs = [];
+
+  // Take a snapshot of ALL existing normalizedIds BEFORE scraping starts.
+  // This prevents the race condition where scrapers add jobs to MongoDB
+  // during their run, causing the outer dedup to treat them as "old".
+  const preRunIds = await mongoService.getAllNormalizedIds();
+
   const dedupeContext = {
     enabled: true,
     seenNormalizedIds: new Set(),
+    preRunIds, // snapshot of IDs that existed before this run
   };
 
   // Process by priority levels
   const priorityLevels = ["high", "medium", "low"];
 
   for (const priority of priorityLevels) {
-    const priorityTasks = sourceTasks.filter(
+    const priorityTasks = filteredTasks.filter(
       (task) => task.priority === priority
     );
 
@@ -830,8 +878,16 @@ async function runComprehensiveScrape(client) {
   );
 
   // Filter for relevant jobs - now include both intern and new grad roles
-  const relevantJobs = filterRelevantJobs(allJobs, "both", {
-    skipSources: ["wellfound"],
+  // Skip curated sources (github, jobright) whose jobs are already
+  // filtered at the scraper level and whose titles may not contain explicit
+  // intern/new-grad keywords (e.g. GitHub job "Google - Software Engineer")
+  // Use partial matching because task names include suffixes like "(New Grad)"
+  const curatedSourcePrefixes = ["github", "jobright"];
+  const relevantJobs = filterRelevantJobs(allJobs, requestedRole !== "both" ? requestedRole : "both", {
+    skipSourceCheck: (source) =>
+      curatedSourcePrefixes.some((prefix) =>
+        (source || "").toLowerCase().startsWith(prefix)
+      ),
   });
   loggerService.log(`✅ Filtered to ${relevantJobs.length} relevant jobs`);
 
@@ -841,8 +897,13 @@ async function runComprehensiveScrape(client) {
     `🎯 Found ${uniqueJobs.length} unique jobs after deduplication`
   );
 
-  const dailyUniqueJobs =
-    await mongoService.filterNewJobsByNormalizedId(uniqueJobs);
+  // Use the pre-run snapshot for final daily dedup (same reason as per-source
+  // dedup: scrapers add to MongoDB during the run, so live queries would
+  // incorrectly filter out everything we just collected)
+  const dailyUniqueJobs = uniqueJobs.filter((job) => {
+    const nid = job.normalizedId || generateJobId(job);
+    return !preRunIds.has(nid);
+  });
   loggerService.log(
     `🧹 Filtered to ${dailyUniqueJobs.length} new jobs after daily dedupe`
   );
@@ -869,9 +930,8 @@ async function runComprehensiveScrape(client) {
     `⚡ Optimization: ${results.optimizationStats.sourcesSkipped} sources skipped, ${results.optimizationStats.existingJobsReused} existing jobs reused`
   );
 
-  // Send final completion summary
+  const postingStart = Date.now();
   if (logChannel) {
-    // Send final summary messages
     const summaryMessages = createDailySummaryMessage(
       results,
       results.highQualityJobsCount || dailyUniqueJobs.length
@@ -882,20 +942,17 @@ async function runComprehensiveScrape(client) {
       await delay(1000);
     }
 
-    // Send the top curated jobs to the log channel (as an overview)
     const jobMessages = createDiscordJobMessages(dailyUniqueJobs);
     for (const jobMsg of jobMessages) {
       await logChannel.send(jobMsg);
       await delay(1500);
     }
 
-    // Send error details if any failures occurred
     if (results.failed.length > 0) {
       const errorDetails = results.failed
         .map((f) => `**${f.name}**: ${f.reason}`)
         .join("\n");
 
-      // Check if error details exceed Discord limit
       if (errorDetails.length > 1900) {
         const truncatedError =
           errorDetails.substring(0, 1900) + "...\n*[Error details truncated]*";
@@ -905,6 +962,39 @@ async function runComprehensiveScrape(client) {
       }
     }
   }
+  const postingDurationSec = Math.round((Date.now() - postingStart) / 1000);
+  loggerService.log(`📤 Discord posting completed in ${postingDurationSec} seconds`);
+
+  // Detailed end-of-run summary (time, errors, per-source counts and date range)
+  const runEnd = new Date();
+  const totalRunSec = Math.round((runEnd - startTime) / 1000);
+  const bySource = {};
+  for (const job of allJobs) {
+    const src = job.source || "unknown";
+    if (!bySource[src]) bySource[src] = { count: 0, dates: [] };
+    bySource[src].count++;
+    if (job.postedDate && String(job.postedDate).trim() && !/^n\/a$/i.test(String(job.postedDate))) {
+      bySource[src].dates.push(String(job.postedDate).trim());
+    }
+  }
+  const sourceLines = Object.entries(bySource).map(([name, data]) => {
+    const dateRange = data.dates.length > 0
+      ? ` (posted: ${[...new Set(data.dates)].slice(0, 3).join(", ")}${data.dates.length > 3 ? "…" : ""})`
+      : "";
+    return `  ${name}: ${data.count} jobs${dateRange}`;
+  });
+  loggerService.log("═══════════════════════════════════════════════════════════");
+  loggerService.log("DAILY RUN SUMMARY");
+  loggerService.log(`  Total duration: ${totalRunSec} seconds (scraping finished ~${Math.round((duration) / 60)} min in, Discord posting: ${postingDurationSec}s)`);
+  loggerService.log(`  Successful: ${results.successful.length} | Failed: ${results.failed.length} | Skipped: ${results.skipped.length}`);
+  if (results.failed.length > 0) {
+    loggerService.log("  Errors:");
+    results.failed.forEach((f) => loggerService.log(`    - ${f.name}: ${f.reason || "unknown"}`));
+  }
+  loggerService.log("  Per-source job counts (this run):");
+  sourceLines.forEach((line) => loggerService.log(line));
+  loggerService.log("  Date range covered: each source uses its own time filter (day / 3 days / week / month)");
+  loggerService.log("═══════════════════════════════════════════════════════════");
 
   return results;
 }
@@ -968,6 +1058,7 @@ async function runScraper() {
   }
 
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  setShutdownClient(client);
 
   try {
     await client.login(process.env.DISCORD_TOKEN);
@@ -1018,9 +1109,14 @@ async function runScraper() {
       } catch (error) {
         loggerService.log(`Error during scraping: ${error.message}`, "error");
       } finally {
-        // Close connections and exit
+        loggerService.log("Shutting down: closing MongoDB and Discord client...");
         await mongoService.close();
-        await client.destroy();
+        try {
+          await client.destroy();
+        } catch (e) {
+          loggerService.log(`Discord client destroy: ${e.message}`, "warn");
+        }
+        await new Promise((r) => setTimeout(r, 1500));
         process.exit(0);
       }
     });
@@ -1030,30 +1126,54 @@ async function runScraper() {
   }
 }
 
-// Handle graceful shutdown
+// Handle graceful shutdown (close Mongo and Discord so process can exit)
+let shutdownClient = null;
+function setShutdownClient(c) {
+  shutdownClient = c;
+}
 process.on("SIGINT", async () => {
   loggerService.log("Received SIGINT, shutting down gracefully...");
   await mongoService.close();
+  if (shutdownClient) {
+    try {
+      await shutdownClient.destroy();
+    } catch (e) {
+      loggerService.log(`Discord destroy on SIGINT: ${e.message}`, "warn");
+    }
+  }
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
   loggerService.log("Received SIGTERM, shutting down gracefully...");
   await mongoService.close();
+  if (shutdownClient) {
+    try {
+      await shutdownClient.destroy();
+    } catch (e) {
+      loggerService.log(`Discord destroy on SIGTERM: ${e.message}`, "warn");
+    }
+  }
   process.exit(0);
 });
 
-// Run the scraper
-if (
-  process.argv.slice(2).length > 0 &&
-  process.argv.slice(2)[0] !== "help" &&
-  process.argv.slice(2)[0] !== "--help" &&
-  process.argv.slice(2)[0] !== "-h"
-) {
-  loggerService.log(
-    `🎯 Initializing specific scraper for: ${process.argv.slice(2)[0]}...`
-  );
-} else {
-  loggerService.log("🚀 Initializing optimized comprehensive job scraper...");
+module.exports = {
+  runComprehensiveScrape,
+};
+
+// Run the scraper only when executed directly
+if (require.main === module) {
+  if (
+    process.argv.slice(2).length > 0 &&
+    process.argv.slice(2)[0] !== "help" &&
+    process.argv.slice(2)[0] !== "--help" &&
+    process.argv.slice(2)[0] !== "-h"
+  ) {
+    loggerService.log(
+      `🎯 Initializing specific scraper for: ${process.argv.slice(2)[0]}...`
+    );
+  } else {
+    loggerService.log("🚀 Initializing optimized comprehensive job scraper...");
+  }
+  runScraper();
 }
-runScraper();

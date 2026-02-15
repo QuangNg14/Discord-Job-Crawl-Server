@@ -16,7 +16,8 @@ const jobCaches = {
   ziprecruiter: new Set(),
   jobright: new Set(),
   github: new Set(),
-  wellfound: new Set(),
+  simplyhired: new Set(),
+  glassdoor: new Set(),
 };
 
 // Connect to MongoDB
@@ -74,14 +75,20 @@ async function connect() {
     );
     collections.jobright = db.collection(config.mongo.collections.jobright);
     collections.github = db.collection(config.mongo.collections.github);
-    collections.wellfound = db.collection(config.mongo.collections.wellfound);
+    if (config.mongo.collections.simplyhired) {
+      collections.simplyhired = db.collection(config.mongo.collections.simplyhired);
+    }
+    if (config.mongo.collections.glassdoor) {
+      collections.glassdoor = db.collection(config.mongo.collections.glassdoor);
+    }
 
     // Create indexes for faster lookups
     await collections.linkedin.createIndex({ jobId: 1 }, { unique: true });
     await collections.ziprecruiter.createIndex({ jobId: 1 }, { unique: true });
     await collections.jobright.createIndex({ jobId: 1 }, { unique: true });
     await collections.github.createIndex({ jobId: 1 }, { unique: true });
-    await collections.wellfound.createIndex({ jobId: 1 }, { unique: true });
+    if (collections.simplyhired) await collections.simplyhired.createIndex({ jobId: 1 }, { unique: true });
+    if (collections.glassdoor) await collections.glassdoor.createIndex({ jobId: 1 }, { unique: true });
 
     logger.log("Successfully connected to MongoDB");
     isConnected = true;
@@ -101,7 +108,8 @@ async function loadCache() {
     await loadSourceCache("ziprecruiter");
     await loadSourceCache("jobright");
     await loadSourceCache("github");
-    await loadSourceCache("wellfound");
+    if (collections.simplyhired) await loadSourceCache("simplyhired");
+    if (collections.glassdoor) await loadSourceCache("glassdoor");
   } catch (error) {
     logger.log(`Error loading job caches: ${error.message}`, "error");
   }
@@ -153,8 +161,6 @@ function getFileCachePath(source) {
       return config.jobright.fileCache;
     case "github":
       return config.github.fileCache;
-    case "wellfound":
-      return config.wellfound.fileCache;
 
     default:
       return `cache/${source}-job-cache.json`;
@@ -470,7 +476,6 @@ async function clearAllCaches() {
   await clearCache("ziprecruiter");
   await clearCache("jobright");
   await clearCache("github");
-  await clearCache("wellfound");
 
   return true;
 }
@@ -525,21 +530,23 @@ async function getAllCacheStats() {
   const ziprecruiterStats = await getCacheStats("ziprecruiter");
   const jobrightStats = await getCacheStats("jobright");
   const githubStats = await getCacheStats("github");
-  const wellfoundStats = await getCacheStats("wellfound");
+  const simplyhiredStats = collections.simplyhired ? await getCacheStats("simplyhired") : { count: 0, source: "N/A", oldestJob: null, newestJob: null };
+  const glassdoorStats = collections.glassdoor ? await getCacheStats("glassdoor") : { count: 0, source: "N/A", oldestJob: null, newestJob: null };
 
   return {
     linkedin: linkedinStats,
     ziprecruiter: ziprecruiterStats,
     jobright: jobrightStats,
     github: githubStats,
-    wellfound: wellfoundStats,
-
+    simplyhired: simplyhiredStats,
+    glassdoor: glassdoorStats,
     total:
       linkedinStats.count +
       ziprecruiterStats.count +
       jobrightStats.count +
       githubStats.count +
-      wellfoundStats.count,
+      simplyhiredStats.count +
+      glassdoorStats.count,
   };
 }
 
@@ -626,12 +633,42 @@ async function getJobsFromSource(source, time = "day") {
   }
 }
 
+/**
+ * Get all existing normalizedIds from all collections.
+ * Used to take a snapshot before scraping starts so that jobs added
+ * during the current run are not falsely treated as "old".
+ * @returns {Set<string>} Set of all known normalizedIds
+ */
+async function getAllNormalizedIds() {
+  const ids = new Set();
+  try {
+    if (!collections || Object.keys(collections).length === 0) {
+      return ids;
+    }
+    for (const [source, collection] of Object.entries(collections)) {
+      if (!collection) continue;
+      const docs = await collection
+        .find({ normalizedId: { $exists: true, $ne: "" } })
+        .project({ normalizedId: 1, _id: 0 })
+        .toArray();
+      docs.forEach((doc) => {
+        if (doc.normalizedId) ids.add(doc.normalizedId);
+      });
+    }
+    logger.log(`📸 Snapshot: ${ids.size} existing normalizedIds from MongoDB`);
+  } catch (error) {
+    logger.log(`Error getting all normalizedIds: ${error.message}`, "error");
+  }
+  return ids;
+}
+
 module.exports = {
   connect,
   loadCache,
   jobExists,
   jobExistsByNormalizedId,
   filterNewJobsByNormalizedId,
+  getAllNormalizedIds,
   getRecentJobs,
   getAllRecentJobs,
   shouldSkipSource,

@@ -7,7 +7,8 @@ const sources = [
   'ziprecruiter',
   'jobright',
   'github',
-  'wellfound'
+  'simplyhired',
+  'glassdoor',
 ];
 
 console.log('📁 Creating cache directory structure...');

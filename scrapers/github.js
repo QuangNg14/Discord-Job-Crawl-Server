@@ -10,7 +10,7 @@ const { delay, filterRelevantJobs, filterJobsByDate, sendJobsToDiscord } = requi
 /**
  * Scrape a GitHub repository for job listings
  * @param {object} repo - Repository configuration object
- * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
+ * @param {string} timeFilter - Time filter for date filtering ("day", "three_days", "week", "month")
  * @returns {Array} Array of job posts
  */
 async function scrapeGithubRepo(repo, role = "intern", timeFilter = "day") {
@@ -48,10 +48,10 @@ async function scrapeGithubRepo(repo, role = "intern", timeFilter = "day") {
       // Define the sections we are interested in and their mapping to our categories
       const targetSections = {
         "software engineering": "software_engineering",
-        "product management": "product_management",
         "data science": "data_science_engineer",
         "ai & machine learning": "data_science_engineer",
-        "data analyst": "data_analysis",
+        "machine learning": "data_science_engineer",
+        "data analysis": "data_analysis",
         "business analyst": "data_analysis"
       };
 
@@ -171,19 +171,30 @@ async function scrapeGithubRepo(repo, role = "intern", timeFilter = "day") {
       };
     });
 
-    // Skip date filtering for curated Pitt CSC / PittCSC Pitt CSCPitt Pitt CSC repositories if requested
-    // Pitt CSC / PittCSC Pitt CSCPitt Pitt CSC repos are updated daily, so we want everything that's new to our database
-    const isCuratedRepo = repo.url.toLowerCase().includes("simplifyjobs") || 
-                         repo.url.toLowerCase().includes("jobright");
-    
-    if (isCuratedRepo) {
-      logger.log(`Skipping date filtering for curated repo ${repo.name} - collecting all jobs`);
+    // Curated repos (SimplifyJobs, JobRight) use age markers like "0d", "1d", "2d"
+    // which are already relative dates. Apply a generous filter for curated repos
+    // to avoid dropping recent jobs due to timezone or parsing issues.
+    const isCuratedRepo =
+      repo.url.toLowerCase().includes("simplifyjobs") ||
+      repo.url.toLowerCase().includes("jobright");
+
+    if (isCuratedRepo && (timeFilter === "all" || timeFilter === "none")) {
+      logger.log(
+        `Skipping date filtering for curated repo ${repo.name} - collecting all jobs`
+      );
       return processedPosts;
     }
 
-    // Apply date filtering based on the specified time filter for other repos
-    const recentJobs = filterJobsByDate(processedPosts, timeFilter);
-    logger.log(`📅 Date filtering: ${recentJobs.length}/${processedPosts.length} jobs from last ${timeFilter}`);
+    // For curated repos, use a generous "recent" window so we send a comprehensive
+    // list to Discord (e.g. Data Science / Data Analysis sections often have older
+    // dates). "month" = last 30 days keeps the list recent but inclusive.
+    const effectiveTimeFilter = isCuratedRepo
+      ? (["day", "three_days", "week"].includes(timeFilter) ? "month" : timeFilter)
+      : timeFilter;
+
+    // Apply date filtering based on the specified time filter
+    const recentJobs = filterJobsByDate(processedPosts, effectiveTimeFilter);
+    logger.log(`📅 Date filtering (${effectiveTimeFilter}): ${recentJobs.length}/${processedPosts.length} jobs from last ${effectiveTimeFilter}${isCuratedRepo ? ' (curated repo, relaxed filter)' : ''}`);
 
     return recentJobs;
   } catch (error) {
@@ -202,7 +213,7 @@ async function scrapeGithubRepo(repo, role = "intern", timeFilter = "day") {
  * @param {object} client - Discord client (optional, if null won't post to Discord)
  * @param {string} mode - Scraping mode: "discord" or "comprehensive"
  * @param {string} role - Job role to filter for
- * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
+ * @param {string} timeFilter - Time filter for date filtering ("day", "three_days", "week", "month")
  * @returns {object} Result object with jobs array
  */
 async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern", timeFilter = "day") {
@@ -286,7 +297,7 @@ async function scrapeRepoAndSend(repo, client, mode = "discord", role = "intern"
  * @param {object} client - Discord client (optional, if null won't post to Discord)
  * @param {string} mode - Scraping mode: "discord" or "comprehensive"
  * @param {string} role - Role type: "intern" or "new grad"
- * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
+ * @param {string} timeFilter - Time filter for date filtering ("day", "three_days", "week", "month")
  * @returns {object} Status object with jobs array
  */
 async function scrapeAllJobs(client, mode = "discord", role = "both", timeFilter = "day") {
@@ -306,12 +317,20 @@ async function scrapeAllJobs(client, mode = "discord", role = "both", timeFilter
     if (client && mode === "discord") {
       const defaultChannel = client.channels.cache.get(config.logChannelId);
       if (defaultChannel) {
-        await defaultChannel.send("GitHub - Internship Posts Update");
+        const roleLabel =
+          role === "new_grad" ? "New Grad" : role === "intern" ? "Internship" : "All Roles";
+        await defaultChannel.send(`GitHub - ${roleLabel} Posts Update`);
       }
     }
 
+    const reposToScrape = config.github.repos.filter((repo) => {
+      if (role === "intern") return repo.type === "intern";
+      if (role === "new_grad") return repo.type === "new_grad";
+      return true;
+    });
+
     // Process each repo and collect results
-    for (const repo of config.github.repos) {
+    for (const repo of reposToScrape) {
       const repoResult = await scrapeRepoAndSend(repo, client, mode, role, timeFilter);
       lastRunStatus.jobsFound += repoResult.jobsFound;
       lastRunStatus.errorCount += repoResult.errorCount;
@@ -351,7 +370,7 @@ async function scrapeAllJobs(client, mode = "discord", role = "both", timeFilter
  * @param {object} client - Discord client
  * @param {string} mode - Scraping mode ("discord" or "comprehensive")
  * @param {string} role - Job role to filter for ("intern" or "new grad")
- * @param {string} timeFilter - Time filter for date filtering ("day", "week", "month")
+ * @param {string} timeFilter - Time filter for date filtering ("day", "three_days", "week", "month")
  * @returns {object} Status object
  */
 async function scrapeSpecificRepo(

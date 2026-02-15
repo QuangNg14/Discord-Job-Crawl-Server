@@ -2,10 +2,8 @@ const { EmbedBuilder } = require("discord.js");
 const linkedinScraper = require("../scrapers/linkedin");
 const simplyhiredScraper = require("../scrapers/simplyhired");
 const ziprecruiterScraper = require("../scrapers/ziprecruiter");
-const careerjetScraper = require("../scrapers/careerjet");
 const jobrightScraper = require("../scrapers/jobright");
 const glassdoorScraper = require("../scrapers/glassdoor");
-const diceScraper = require("../scrapers/dice");
 const githubScraper = require("../scrapers/github");
 const mongoService = require("./mongo");
 const logger = require("./logger");
@@ -31,12 +29,6 @@ let commandStatus = {
     jobsFound: 0,
     errorCount: 0,
   },
-  careerjet: {
-    lastRun: null,
-    success: false,
-    jobsFound: 0,
-    errorCount: 0,
-  },
   jobright: {
     lastRun: null,
     success: false,
@@ -44,12 +36,6 @@ let commandStatus = {
     errorCount: 0,
   },
   glassdoor: {
-    lastRun: null,
-    success: false,
-    jobsFound: 0,
-    errorCount: 0,
-  },
-  dice: {
     lastRun: null,
     success: false,
     jobsFound: 0,
@@ -194,47 +180,6 @@ async function processCommand(command, message, client) {
       );
     }
 
-    // CareerJet specific commands
-    else if (command === "jobscareerjet" || command === "careerjet") {
-      await message.reply(
-        "Starting CareerJet job scraping for the past 24 hours..."
-      );
-      await executeCommand(
-        "jobscareerjet",
-        { timeFilter: config.careerjet.timeFilters.day },
-        client
-      );
-    }
-    // CareerJet time-specific commands
-    else if (command === "careerjetday") {
-      await message.reply(
-        "Starting CareerJet job scraping for the past 24 hours..."
-      );
-      await executeCommand(
-        "jobscareerjet",
-        { timeFilter: config.careerjet.timeFilters.day },
-        client
-      );
-    } else if (command === "careerjetweek") {
-      await message.reply(
-        "Starting CareerJet job scraping for the past week..."
-      );
-      await executeCommand(
-        "jobscareerjet",
-        { timeFilter: config.careerjet.timeFilters.week },
-        client
-      );
-    } else if (command === "careerjetmonth") {
-      await message.reply(
-        "Starting CareerJet job scraping for the past month..."
-      );
-      await executeCommand(
-        "jobscareerjet",
-        { timeFilter: config.careerjet.timeFilters.month },
-        client
-      );
-    }
-
     // Jobright specific commands
     else if (command === "jobsjobright" || command === "jobright") {
       await message.reply("Starting Jobright.ai job scraping...");
@@ -264,54 +209,6 @@ async function processCommand(command, message, client) {
         "Starting Glassdoor job scraping for the past month..."
       );
       await executeCommand("jobsglassdoor", { timeFilter: "month" }, client);
-    }
-
-    // Dice specific commands
-    else if (command === "jobsdice" || command === "dice") {
-      await message.reply(
-        "Starting Dice.com job scraping for today's postings..."
-      );
-      await executeCommand(
-        "jobsdice",
-        { timeFilter: config.dice.timeFilters.day },
-        client
-      );
-    }
-    // Dice time-specific commands
-    else if (command === "dicetoday") {
-      await message.reply(
-        "Starting Dice.com job scraping for today's postings..."
-      );
-      await executeCommand(
-        "jobsdice",
-        { timeFilter: config.dice.timeFilters.day },
-        client
-      );
-    } else if (command === "dice3days") {
-      await message.reply(
-        "Starting Dice.com job scraping for the last 3 days..."
-      );
-      await executeCommand(
-        "jobsdice",
-        { timeFilter: config.dice.timeFilters.threeDay },
-        client
-      );
-    } else if (command === "dice7days") {
-      await message.reply(
-        "Starting Dice.com job scraping for the last 7 days..."
-      );
-      await executeCommand(
-        "jobsdice",
-        { timeFilter: config.dice.timeFilters.week },
-        client
-      );
-    } else if (command === "diceall") {
-      await message.reply("Starting Dice.com job scraping for all dates...");
-      await executeCommand(
-        "jobsdice",
-        { timeFilter: config.dice.timeFilters.all },
-        client
-      );
     }
 
     // GitHub specific commands
@@ -367,9 +264,7 @@ async function processCommand(command, message, client) {
           linkedinTimeFilter: config.linkedin.timeFilters.day,
           simplyhiredTimeFilter: config.simplyhired.timeFilters.day,
           ziprecruiterTimeFilter: config.ziprecruiter.timeFilters.day,
-          careerjetTimeFilter: config.careerjet.timeFilters.day,
           glassdoorTimeFilter: "day",
-          diceTimeFilter: config.dice.timeFilters.day,
         },
         client
       );
@@ -385,9 +280,7 @@ async function processCommand(command, message, client) {
           linkedinTimeFilter: config.linkedin.timeFilters.day,
           simplyhiredTimeFilter: config.simplyhired.timeFilters.day,
           ziprecruiterTimeFilter: config.ziprecruiter.timeFilters.day,
-          careerjetTimeFilter: config.careerjet.timeFilters.day,
           glassdoorTimeFilter: "day",
-          diceTimeFilter: config.dice.timeFilters.day,
         },
         client
       );
@@ -401,9 +294,7 @@ async function processCommand(command, message, client) {
           linkedinTimeFilter: config.linkedin.timeFilters.week,
           simplyhiredTimeFilter: config.simplyhired.timeFilters.week,
           ziprecruiterTimeFilter: config.ziprecruiter.timeFilters.week,
-          careerjetTimeFilter: config.careerjet.timeFilters.week,
           glassdoorTimeFilter: "week",
-          diceTimeFilter: config.dice.timeFilters.week,
         },
         client
       );
@@ -417,9 +308,7 @@ async function processCommand(command, message, client) {
           linkedinTimeFilter: config.linkedin.timeFilters.month,
           simplyhiredTimeFilter: config.simplyhired.timeFilters.month,
           ziprecruiterTimeFilter: config.ziprecruiter.timeFilters.month,
-          careerjetTimeFilter: config.careerjet.timeFilters.month,
           glassdoorTimeFilter: "month",
-          diceTimeFilter: config.dice.timeFilters.week,
         },
         client
       );
@@ -433,9 +322,7 @@ async function processCommand(command, message, client) {
           linkedinTimeFilter: config.linkedin.timeFilters.day,
           simplyhiredTimeFilter: config.simplyhired.timeFilters.day,
           ziprecruiterTimeFilter: config.ziprecruiter.timeFilters.day,
-          careerjetTimeFilter: config.careerjet.timeFilters.day,
           glassdoorTimeFilter: "day",
-          diceTimeFilter: config.dice.timeFilters.day,
         },
         client
       );
@@ -454,18 +341,12 @@ async function processCommand(command, message, client) {
     } else if (command === "clearziprecruiter") {
       await mongoService.clearCache("ziprecruiter");
       await message.reply("ZipRecruiter job cache has been cleared.");
-    } else if (command === "clearcareerjet") {
-      await mongoService.clearCache("careerjet");
-      await message.reply("CareerJet job cache has been cleared.");
     } else if (command === "clearjobright") {
       await mongoService.clearCache("jobright");
       await message.reply("Jobright.ai job cache has been cleared.");
     } else if (command === "clearglassdoor") {
       await mongoService.clearCache("glassdoor");
       await message.reply("Glassdoor job cache has been cleared.");
-    } else if (command === "cleardice") {
-      await mongoService.clearCache("dice");
-      await message.reply("Dice.com job cache has been cleared.");
     } else if (command === "cleargithub") {
       await mongoService.clearCache("github");
       await message.reply("GitHub job cache has been cleared.");
@@ -485,10 +366,8 @@ async function processCommand(command, message, client) {
         command.startsWith("linkedin") ||
         command.startsWith("simplyhired") ||
         command.startsWith("ziprecruiter") ||
-        command.startsWith("careerjet") ||
         command.startsWith("jobright") ||
         command.startsWith("glassdoor") ||
-        command.startsWith("dice") ||
         command.startsWith("github")
       ) {
         await message.reply(
@@ -541,37 +420,20 @@ async function executeCommand(command, options, client) {
               config.ziprecruiter.timeFilters.day,
             client
           ),
-          careerjetScraper.scrapeAllJobs(
-            options?.careerjetTimeFilter || config.careerjet.timeFilters.day,
-            client
-          ),
           jobrightScraper.scrapeAllJobs(client),
           glassdoorScraper.scrapeAllJobs(
             options?.glassdoorTimeFilter || "day",
-            client
-          ),
-          diceScraper.scrapeAllJobs(
-            options?.diceTimeFilter || config.dice.timeFilters.day,
             client
           ),
           githubScraper.scrapeAllJobs(client),
         ]);
 
         // Process results from all scrapers
+        const sourceNames = ["linkedin", "simplyhired", "ziprecruiter", "jobright", "glassdoor", "github"];
         for (let i = 0; i < results.length; i++) {
           const result = results[i];
-          if (result && result.jobsFound > 0) {
-            const sourceName = [
-              "linkedin",
-              "simplyhired",
-              "ziprecruiter",
-              "careerjet",
-              "jobright",
-              "glassdoor",
-              "dice",
-              "github",
-            ][i];
-            commandStatus[sourceName] = result;
+          if (result && result.jobsFound > 0 && sourceNames[i]) {
+            commandStatus[sourceNames[i]] = result;
           }
         }
 
@@ -591,11 +453,9 @@ async function executeCommand(command, options, client) {
           linkedin: results[0],
           simplyhired: results[1],
           ziprecruiter: results[2],
-          careerjet: results[3],
-          jobright: results[4],
-          glassdoor: results[5],
-          dice: results[6],
-          github: results[7],
+          jobright: results[3],
+          glassdoor: results[4],
+          github: results[5],
           totalJobs: results.reduce(
             (sum, result) => sum + (result?.jobsFound || 0),
             0
@@ -636,15 +496,6 @@ async function executeCommand(command, options, client) {
         );
         commandStatus.ziprecruiter = resultZiprecruiter;
         return resultZiprecruiter;
-      case "jobscareerjet":
-        const resultCareerjet = await careerjetScraper.scrapeAllJobs(
-          options.timeFilter,
-          client,
-          "discord",
-          options.role || "intern"
-        );
-        commandStatus.careerjet = resultCareerjet;
-        return resultCareerjet;
       case "jobsjobright":
         const resultJobright = await jobrightScraper.scrapeAllJobs(
           client,
@@ -662,15 +513,6 @@ async function executeCommand(command, options, client) {
         );
         commandStatus.glassdoor = resultGlassdoor;
         return resultGlassdoor;
-      case "jobsdice":
-        const resultDice = await diceScraper.scrapeAllJobs(
-          options.timeFilter,
-          client,
-          "discord",
-          options.role || "intern"
-        );
-        commandStatus.dice = resultDice;
-        return resultDice;
       case "jobsgithub":
         const resultGithub = await githubScraper.scrapeAllJobs(
           client,
@@ -770,12 +612,6 @@ async function executeCommand(command, options, client) {
         );
         commandStatus.ziprecruiter = ziprecruiterResult;
 
-        const careerjetResult = await careerjetScraper.scrapeAllJobs(
-          options.careerjetTimeFilter,
-          client
-        );
-        commandStatus.careerjet = careerjetResult;
-
         const jobrightResult = await jobrightScraper.scrapeAllJobs(client);
         commandStatus.jobright = jobrightResult;
 
@@ -785,32 +621,22 @@ async function executeCommand(command, options, client) {
         );
         commandStatus.glassdoor = glassdoorResult;
 
-        const diceResult = await diceScraper.scrapeAllJobs(
-          options.diceTimeFilter,
-          client
-        );
-        commandStatus.dice = diceResult;
-
         // Send summary message
         if (channel) {
           const totalJobs =
             linkedinResult.jobsFound +
             simplyhiredResult.jobsFound +
             ziprecruiterResult.jobsFound +
-            careerjetResult.jobsFound +
             jobrightResult.jobsFound +
-            glassdoorResult.jobsFound +
-            diceResult.jobsFound;
+            glassdoorResult.jobsFound;
 
           await channel.send(
             `Job scraping complete for all job board sources. Found ${totalJobs} new jobs total:\n` +
               `- LinkedIn: ${linkedinResult.jobsFound}\n` +
               `- SimplyHired: ${simplyhiredResult.jobsFound}\n` +
               `- ZipRecruiter: ${ziprecruiterResult.jobsFound}\n` +
-              `- CareerJet: ${careerjetResult.jobsFound}\n` +
               `- Jobright.ai: ${jobrightResult.jobsFound}\n` +
-              `- Glassdoor: ${glassdoorResult.jobsFound}\n` +
-              `- Dice.com: ${diceResult.jobsFound}`
+              `- Glassdoor: ${glassdoorResult.jobsFound}`
           );
         }
 
@@ -818,18 +644,14 @@ async function executeCommand(command, options, client) {
           linkedin: linkedinResult,
           simplyhired: simplyhiredResult,
           ziprecruiter: ziprecruiterResult,
-          careerjet: careerjetResult,
           jobright: jobrightResult,
           glassdoor: glassdoorResult,
-          dice: diceResult,
           totalJobs:
             linkedinResult.jobsFound +
             simplyhiredResult.jobsFound +
             ziprecruiterResult.jobsFound +
-            careerjetResult.jobsFound +
             jobrightResult.jobsFound +
-            glassdoorResult.jobsFound +
-            diceResult.jobsFound,
+            glassdoorResult.jobsFound,
         };
       default:
         throw new Error(`Unknown command: ${command}`);
@@ -920,27 +742,6 @@ async function sendStatusReport(message) {
       );
     }
 
-    // Add CareerJet status info if available
-    if (commandStatus.careerjet.lastRun) {
-      statusEmbed.addFields(
-        {
-          name: "CareerJet Last Run",
-          value: commandStatus.careerjet.lastRun.toLocaleString(),
-          inline: true,
-        },
-        {
-          name: "CareerJet Status",
-          value: commandStatus.careerjet.success ? "Success" : "Failed",
-          inline: true,
-        },
-        {
-          name: "CareerJet Jobs Found",
-          value: commandStatus.careerjet.jobsFound.toString(),
-          inline: true,
-        }
-      );
-    }
-
     // Add Jobright status info if available
     if (commandStatus.jobright.lastRun) {
       statusEmbed.addFields(
@@ -978,27 +779,6 @@ async function sendStatusReport(message) {
         {
           name: "Glassdoor Jobs Found",
           value: commandStatus.glassdoor.jobsFound.toString(),
-          inline: true,
-        }
-      );
-    }
-
-    // Add Dice status info if available
-    if (commandStatus.dice.lastRun) {
-      statusEmbed.addFields(
-        {
-          name: "Dice.com Last Run",
-          value: commandStatus.dice.lastRun.toLocaleString(),
-          inline: true,
-        },
-        {
-          name: "Dice.com Status",
-          value: commandStatus.dice.success ? "Success" : "Failed",
-          inline: true,
-        },
-        {
-          name: "Dice.com Jobs Found",
-          value: commandStatus.dice.jobsFound.toString(),
           inline: true,
         }
       );
@@ -1070,11 +850,6 @@ async function sendDatabaseStatus(message) {
           inline: true,
         },
         {
-          name: "CareerJet Cache Count",
-          value: cacheStats.careerjet.count.toString(),
-          inline: true,
-        },
-        {
           name: "Jobright.ai Cache Count",
           value: cacheStats.jobright.count.toString(),
           inline: true,
@@ -1082,11 +857,6 @@ async function sendDatabaseStatus(message) {
         {
           name: "Glassdoor Cache Count",
           value: cacheStats.glassdoor.count.toString(),
-          inline: true,
-        },
-        {
-          name: "Dice.com Cache Count",
-          value: cacheStats.dice.count.toString(),
           inline: true,
         },
         {
@@ -1162,10 +932,8 @@ async function sendHelpMessage(message) {
           name: "Other Job Sources",
           value:
             "!ziprecruiter - Scrape ZipRecruiter jobs\n" +
-            "!careerjet - Scrape CareerJet jobs\n" +
             "!jobright - Scrape Jobright.ai jobs\n" +
-            "!glassdoor - Scrape Glassdoor jobs\n" +
-            "!dice - Scrape Dice.com jobs",
+            "!glassdoor - Scrape Glassdoor jobs",
         },
         {
           name: "Combined Commands",
@@ -1209,10 +977,8 @@ async function handleSlash(interaction, client) {
       linkedin: "jobslinkedin",
       simplyhired: "jobssimplyhired",
       ziprecruiter: "jobsziprecruiter",
-      careerjet: "jobscareerjet",
       jobright: "jobsjobright",
       glassdoor: "jobsglassdoor",
-      dice: "jobsdice",
       github: "jobsgithub",
       daily: "daily",
       status: "status",
@@ -1235,9 +1001,7 @@ async function handleSlash(interaction, client) {
         linkedinTimeFilter: time,
         simplyhiredTimeFilter: time,
         ziprecruiterTimeFilter: time,
-        careerjetTimeFilter: time,
         glassdoorTimeFilter: time,
-        diceTimeFilter: time,
       };
     } else if (legacyCommand === "jobslinkedin") {
       // Handle LinkedIn-specific options
